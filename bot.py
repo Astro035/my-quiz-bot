@@ -23,10 +23,7 @@ ADMIN_ID = 6638229765
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
-
-# 📢 MAJBURIY OBUNA KANALI
-CHANNEL_ID = '-1003501768656' # Yopiq kanallar uchun doim -100 bilan boshlanadi
-CHANNEL_LINK = 'https://t.me/+1fIB8_JwBso2OWEy' # Kanal ssilkasi
+# (Kanal sozlamalari bu yerdan olib tashlandi, endi bazadan boshqariladi)
 # =====================================================================
 
 # =====================================================================
@@ -47,7 +44,8 @@ def set_bot_menu():
         types.BotCommand("top", "🏆 Eng kuchli bilimdonlar reytingi"),
         types.BotCommand("help", "Fayl formati qoidalari"),
         types.BotCommand("restart", "Yechilgan testlar tarixini tozalash"),
-        types.BotCommand("finish", "Faol quizni yakunlash")
+        types.BotCommand("finish", "Faol quizni yakunlash"),
+        types.BotCommand("stat", "👑 Admin Panel (Faqat Admin uchun)")
     ]
     bot.set_my_commands(commands)
 
@@ -76,6 +74,12 @@ def init_db():
                         referrals_count INTEGER DEFAULT 0,
                         join_date DATE DEFAULT CURRENT_DATE
                     )''')
+    # Dinamik kanallar uchun jadval
+    cursor.execute('''CREATE TABLE IF NOT EXISTS channels (
+                        channel_id TEXT PRIMARY KEY,
+                        channel_title TEXT,
+                        channel_invite_link TEXT
+                    )''')
     conn.commit()
     conn.close()
 
@@ -91,23 +95,42 @@ def check_vip_status(user_id):
     conn.close()
     return bool(row and row[0] == 1)
 
-def check_channel_sub(user_id):
+def check_all_subscriptions(user_id):
+    """Bazada bor barcha kanallarga obunani tekshiradi"""
     if user_id == ADMIN_ID: return True
-    try:
-        status = bot.get_chat_member(CHANNEL_ID, user_id).status
-        return status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        return False 
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT channel_id, channel_title, channel_invite_link FROM channels")
+    channels = cursor.fetchall()
+    conn.close()
+
+    if not channels: return True
+
+    not_subscribed = []
+    for ch_id, ch_title, ch_link in channels:
+        try:
+            member = bot.get_chat_member(chat_id=ch_id, user_id=user_id)
+            if member.status in ['left', 'kicked']:
+                not_subscribed.append((ch_title, ch_link))
+        except Exception:
+            # Agar bot kanalda admin bo'lmasa, uni ham qo'shib yuboradi
+            not_subscribed.append((ch_title, ch_link))
+    return not_subscribed
 
 def require_subscription(message):
     chat_id = message.chat.id
-    if not check_channel_sub(chat_id):
+    unsubscribed = check_all_subscriptions(chat_id)
+    
+    if unsubscribed is not True and len(unsubscribed) > 0:
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("📢 Kanalga a'zo bo'lish", url=CHANNEL_LINK),
-            types.InlineKeyboardButton("✅ A'zo bo'ldim", callback_data="check_sub_btn")
-        )
-        bot.send_message(chat_id, "🛑 **Diqqat!**\n\nBotdan foydalanish uchun avvalo rasmiy kanalimizga a'zo bo'lishingiz shart. A'zo bo'lgach, pastdagi tugmani bosing.", reply_markup=markup, parse_mode="Markdown")
+        text = "🛑 **Diqqat!**\n\nBotdan foydalanish uchun quyidagi rasmiy kanallarimizga a'zo bo'lishingiz shart:\n\n"
+        
+        for idx, (ch_title, ch_link) in enumerate(unsubscribed, 1):
+            text += f"{idx}. {ch_title}\n"
+            markup.add(types.InlineKeyboardButton(f"📢 {ch_title} ga o'tish", url=ch_link))
+            
+        markup.add(types.InlineKeyboardButton("✅ A'zo bo'ldim", callback_data="check_sub_btn"))
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
         return True 
     return False 
 
@@ -254,6 +277,7 @@ def cmd_top(message):
         
     bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
+# --- 👑 INTEGRATSIYA: ADMIN PANEL & STATISTIKA ---
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     if message.chat.id != ADMIN_ID: return
@@ -265,15 +289,31 @@ def cmd_stat(message):
     today_users = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM vip_users WHERE is_vip = 1")
     vip_users = cursor.fetchone()[0]
+    
+    cursor.execute("SELECT COUNT(*) FROM channels")
+    total_channels = cursor.fetchone()[0]
     conn.close()
     
     text = (
-        "📊 **BOT STATISTIKASI:**\n\n"
-        f"👥 Jami foydalanuvchilar: **{total_users}**\n"
-        f"🆕 Bugun qo'shilganlar: **{today_users}**\n"
-        f"💎 VIP mijozlar: **{vip_users}**"
+        "👑 **BOSHQUROV PANELIGA XUSH KELIBSIZ!**\n\n"
+        "📊 **BOT STATISTIKASI:**\n"
+        f"👥 Jami foydalanuvchilar: **{total_users} ta**\n"
+        f"🆕 Bugun qo'shilganlar: **{today_users} ta**\n"
+        f"💎 VIP mijozlar: **{vip_users} ta**\n"
+        f"📢 Majburiy kanallar: **{total_channels} ta**\n\n"
+        "Quyidagi tugmalar orqali botni boshqarishingiz mumkin:"
     )
-    bot.send_message(ADMIN_ID, text, parse_mode="Markdown")
+    
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📢 Xabar tarqatish", callback_data="admin_broadcast"),
+        types.InlineKeyboardButton("🔄 Panelni yangilash", callback_data="admin_refresh")
+    )
+    markup.add(
+        types.InlineKeyboardButton("➕ Kanal qo'shish", callback_data="admin_add_ch"),
+        types.InlineKeyboardButton("❌ Kanalni o'chirish", callback_data="admin_del_ch")
+    )
+    bot.send_message(ADMIN_ID, text, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['addvip'])
 def cmd_addvip(message):
@@ -322,6 +362,7 @@ def cmd_restart(message):
     if chat_id in user_data: del user_data[chat_id]
     bot.send_message(chat_id, "🔄 **Tarix tozalandi!**\nBarcha savollar boshidan beriladi.")
 
+# --- 🔄 INTEGRATSIYA: CHALA QOLGAN SAVOLLARNI TARIXDAN TOZALASH ---
 @bot.message_handler(commands=['finish'])
 def cmd_finish(message):
     chat_id = message.chat.id
@@ -329,11 +370,24 @@ def cmd_finish(message):
     if data and data.get('selected_questions'):
         correct = data.get('correct_count', 0)
         total = len(data['selected_questions'])
+        current_idx = data.get('current_index', 0)
         percentage = int((correct / total) * 100) if total > 0 else 0
+        
+        # CHALA QOLGAN TESTLARNI TARIXDAN TOZALASH
+        unanswered_questions = data['selected_questions'][current_idx:]
+        if unanswered_questions:
+            conn = sqlite3.connect('bot_database.db')
+            cursor = conn.cursor()
+            for q in unanswered_questions:
+                cursor.execute("DELETE FROM history WHERE user_id=? AND question_text=?", (chat_id, q['text']))
+            conn.commit()
+            conn.close()
+            
         data['active_poll_id'] = None 
-        data['last_batch'] = data['selected_questions']
+        data['last_batch'] = data['selected_questions'][:current_idx] 
         data['selected_questions'] = [] 
-        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)", parse_mode="Markdown")
+        
+        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{current_idx}** ({percentage}%)\n⚠️ Yechishga ulgurmagan testlaringiz umumiy balansga muvaffaqiyatli qaytarildi.", parse_mode="Markdown")
         check_remaining_and_ask(chat_id)
     else:
         bot.send_message(chat_id, "ℹ️ Hozirda hech qanday faol test yo'q.")
@@ -380,11 +434,12 @@ def handle_query(call):
     chat_id = call.message.chat.id
     
     if call.data == "check_sub_btn":
-        if check_channel_sub(call.from_user.id):
+        unsubscribed = check_all_subscriptions(call.from_user.id)
+        if unsubscribed is True or len(unsubscribed) == 0:
             bot.delete_message(chat_id, call.message.message_id)
-            bot.send_message(chat_id, "✅ Rahmat! Kanalga a'zo bo'ldingiz.\nEndi botdan bemalol foydalanishingiz mumkin. Boshlash uchun /start ni bosing.")
+            bot.send_message(chat_id, "✅ Rahmat! Barcha kanallarga a'zo bo'ldingiz.\nEndi botdan bemalol foydalanishingiz mumkin. Boshlash uchun /start ni bosing.")
         else:
-            bot.answer_callback_query(call.id, "❌ Hali kanalga a'zo bo'lmadingiz! Iltimos, a'zo bo'lib keyin tugmani bosing.", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Hali barcha kanallarga a'zo bo'lmadingiz! Iltimos, tekshirib qaytadan urinib ko'ring.", show_alert=True)
         return
     
     if call.data == "upload_prompt":
@@ -395,6 +450,53 @@ def handle_query(call):
     elif call.data == "buy_vip":
         send_payment_msg(chat_id)
         bot.answer_callback_query(call.id)
+        return
+
+    # --- ADMIN CALLBACK MANTIQLARI ---
+    elif call.data == "admin_broadcast":
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(chat_id, "📢 **Reklama xabarini yuboring.**\n\nSiz yuborgan xabar (matn, rasm yoki video) botning barcha foydalanuvchilariga yuboriladi. Bekor qilish uchun /cancel deb yozing.")
+        bot.register_next_step_handler(msg, process_admin_broadcast)
+        return
+
+    elif call.data == "admin_refresh":
+        bot.answer_callback_query(call.id, "🔄 Yangilanmoqda...")
+        bot.delete_message(chat_id, call.message.message_id)
+        cmd_stat(call.message)
+        return
+
+    elif call.data == "admin_add_ch":
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(chat_id, "➕ **Kanal qo'shish uchun ma'lumotni shu formatda yuboring:**\n\n`ID | Nomi | Ssilka`\n\nMisol:\n`-100123456789 | Mening Kanalim | https://t.me/+abcde`", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, process_add_channel)
+        return
+
+    elif call.data == "admin_del_ch":
+        bot.answer_callback_query(call.id)
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT channel_id, channel_title FROM channels")
+        channels = cursor.fetchall()
+        conn.close()
+        
+        if not channels:
+            bot.send_message(chat_id, "📭 Bazada hech qanday kanal yo'q.")
+            return
+            
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for ch in channels:
+            markup.add(types.InlineKeyboardButton(f"❌ {ch[1]}", callback_data=f"delch_{ch[0]}"))
+        bot.send_message(chat_id, "O'chirmoqchi bo'lgan kanalingizni tanlang:", reply_markup=markup)
+        return
+
+    elif call.data.startswith("delch_"):
+        ch_id = call.data.split('_')[1]
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM channels WHERE channel_id = ?", (ch_id,))
+        conn.commit()
+        conn.close()
+        bot.edit_message_text("✅ Kanal ro'yxatdan muvaffaqiyatli o'chirildi.", chat_id, call.message.message_id)
         return
 
     elif call.data.startswith("count_") or call.data == "retry_last":
@@ -422,6 +524,50 @@ def handle_query(call):
         bot.delete_message(chat_id, call.message.message_id)
         bot.send_message(chat_id, "🚀 Test boshlanmoqda...")
         prepare_quiz(chat_id)
+
+# --- ADMIN KANAL VA REKLAMA FUNKSIYALARI ---
+def process_add_channel(message):
+    if message.chat.id != ADMIN_ID: return
+    try:
+        parts = message.text.split('|')
+        ch_id = parts[0].strip()
+        ch_title = parts[1].strip()
+        ch_link = parts[2].strip()
+        
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO channels (channel_id, channel_title, channel_invite_link) VALUES (?, ?, ?)", (ch_id, ch_title, ch_link))
+        conn.commit()
+        conn.close()
+        
+        bot.send_message(message.chat.id, f"✅ **{ch_title}** kanali bazaga muvaffaqiyatli qo'shildi!\n\n⚠️ Diqqat: Bot o'sha kanalda admin ekanligini tekshirishni unutmang, aks holda tekshiruv ishlamaydi.", parse_mode="Markdown")
+    except Exception:
+        bot.send_message(message.chat.id, "❌ Xatolik! Format noto'g'ri yuborildi. Iltimos, qaytadan `ID | Nomi | Ssilka` formatida urinib ko'ring.", parse_mode="Markdown")
+
+def process_admin_broadcast(message):
+    if message.chat.id != ADMIN_ID: return
+    if message.text == '/cancel':
+        bot.send_message(ADMIN_ID, "❌ Reklama yuborish bekor qilindi.")
+        return
+
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM user_stats")
+    all_users = cursor.fetchall()
+    conn.close()
+
+    bot.send_message(ADMIN_ID, f"🚀 **{len(all_users)} ta** foydalanuvchiga reklama yuborish boshlandi...")
+    success = 0
+    failed = 0
+
+    for user in all_users:
+        try:
+            bot.copy_message(chat_id=user[0], from_chat_id=ADMIN_ID, message_id=message.message_id)
+            success += 1
+        except Exception:
+            failed += 1
+
+    bot.send_message(ADMIN_ID, f"✅ **Yuborish yakunlandi!**\n\n🟢 Muvaffaqiyatli: {success} ta\n🔴 Yetkazilmadi (bloklaganlar): {failed} ta")
 
 def prepare_quiz(chat_id):
     data = user_data.get(chat_id)
@@ -507,6 +653,16 @@ def check_remaining_and_ask(chat_id):
 def auto_force_next(chat_id, expected_idx, poll_id):
     data = user_data.get(chat_id)
     if data and data.get('current_index') == expected_idx and data.get('active_poll_id') == poll_id:
+        try:
+            current_q = data['selected_questions'][expected_idx]
+            conn = sqlite3.connect('bot_database.db')
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM history WHERE user_id=? AND question_text=?", (chat_id, current_q['text']))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
         data['active_poll_id'] = None
         data['current_index'] += 1
         send_next_question(chat_id)
@@ -526,4 +682,3 @@ def handle_poll_answer(poll_answer):
 
 if __name__ == "__main__":
     bot.infinity_polling(none_stop=True)
-    
