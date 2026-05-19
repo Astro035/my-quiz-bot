@@ -23,7 +23,6 @@ ADMIN_ID = 6638229765
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
-# (Kanal sozlamalari bu yerdan olib tashlandi, endi bazadan boshqariladi)
 # =====================================================================
 
 # =====================================================================
@@ -38,16 +37,26 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 # =====================================================================
 
+# --- MENYUNI SOZLASH ---
 def set_bot_menu():
-    commands = [
+    # 1. Oddiy foydalanuvchilar uchun menyu (/stat yashirilgan)
+    public_commands = [
         types.BotCommand("start", "Botni ishga tushirish"),
         types.BotCommand("top", "🏆 Eng kuchli bilimdonlar reytingi"),
         types.BotCommand("help", "Fayl formati qoidalari"),
         types.BotCommand("restart", "Yechilgan testlar tarixini tozalash"),
-        types.BotCommand("finish", "Faol quizni yakunlash"),
-        types.BotCommand("stat", "👑 Admin Panel (Faqat Admin uchun)")
+        types.BotCommand("finish", "Faol quizni yakunlash")
     ]
-    bot.set_my_commands(commands)
+    bot.set_my_commands(public_commands)
+    
+    # 2. Faqat siz (Admin) uchun maxsus menyu (/stat qo'shilgan)
+    admin_commands = public_commands.copy()
+    admin_commands.append(types.BotCommand("stat", "👑 Admin Panel"))
+    
+    try:
+        bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(ADMIN_ID))
+    except Exception:
+        pass
 
 set_bot_menu()
 
@@ -113,7 +122,6 @@ def check_all_subscriptions(user_id):
             if member.status in ['left', 'kicked']:
                 not_subscribed.append((ch_title, ch_link))
         except Exception:
-            # Agar bot kanalda admin bo'lmasa, uni ham qo'shib yuboradi
             not_subscribed.append((ch_title, ch_link))
     return not_subscribed
 
@@ -295,7 +303,7 @@ def cmd_stat(message):
     conn.close()
     
     text = (
-        "👑 **BOSHQUROV PANELIGA XUSH KELIBSIZ!**\n\n"
+        "👑 **BOSHQARUV PANELIGA XUSH KELIBSIZ!**\n\n"
         "📊 **BOT STATISTIKASI:**\n"
         f"👥 Jami foydalanuvchilar: **{total_users} ta**\n"
         f"🆕 Bugun qo'shilganlar: **{today_users} ta**\n"
