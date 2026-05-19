@@ -17,12 +17,16 @@ bot = telebot.TeleBot(TOKEN)
 bot_info = bot.get_me()
 
 # =====================================================================
-# ⚙️ VIP VA TO'LOV SOZLAMALARI
+# ⚙️ ASOSIY SOZLAMALAR
 # =====================================================================
-ADMIN_ID = 6638229765  # 🔥 DIQQAT: O'zingizning ID raqamingizni yozing!
+ADMIN_ID = 6638229765  
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
+
+# 📢 MAJBURIY OBUNA KANALI
+CHANNEL_ID = '-1003501768656' # Yopiq kanallar uchun doim -100 bilan boshlanadi
+CHANNEL_LINK = 'https://t.me/+1fIB8_JwBso2OWEy' # Kanal ssilkasi
 # =====================================================================
 
 # =====================================================================
@@ -77,7 +81,7 @@ def init_db():
 
 init_db()
 
-# --- FOYDALANUVCHI FUNKSIYALARI ---
+# --- FOYDALANUVCHI VA OBUNA FUNKSIYALARI ---
 def check_vip_status(user_id):
     if user_id == ADMIN_ID: return True
     conn = sqlite3.connect('bot_database.db')
@@ -86,6 +90,26 @@ def check_vip_status(user_id):
     row = cursor.fetchone()
     conn.close()
     return bool(row and row[0] == 1)
+
+def check_channel_sub(user_id):
+    if user_id == ADMIN_ID: return True
+    try:
+        status = bot.get_chat_member(CHANNEL_ID, user_id).status
+        return status in ['member', 'administrator', 'creator']
+    except Exception as e:
+        return False 
+
+def require_subscription(message):
+    chat_id = message.chat.id
+    if not check_channel_sub(chat_id):
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        markup.add(
+            types.InlineKeyboardButton("📢 Kanalga a'zo bo'lish", url=CHANNEL_LINK),
+            types.InlineKeyboardButton("✅ A'zo bo'ldim", callback_data="check_sub_btn")
+        )
+        bot.send_message(chat_id, "🛑 **Diqqat!**\n\nBotdan foydalanish uchun avvalo rasmiy kanalimizga a'zo bo'lishingiz shart. A'zo bo'lgach, pastdagi tugmani bosing.", reply_markup=markup, parse_mode="Markdown")
+        return True 
+    return False 
 
 def get_or_create_user(user_id, first_name, referrer_id=None):
     conn = sqlite3.connect('bot_database.db')
@@ -96,7 +120,6 @@ def get_or_create_user(user_id, first_name, referrer_id=None):
     if not user:
         cursor.execute("INSERT INTO user_stats (user_id, first_name) VALUES (?, ?)", (user_id, first_name))
         conn.commit()
-        # Referal tizimi
         if referrer_id and referrer_id != user_id:
             cursor.execute("UPDATE user_stats SET referrals_count = referrals_count + 1 WHERE user_id=?", (referrer_id,))
             conn.commit()
@@ -182,6 +205,8 @@ def parse_questions(text):
 # --- BUYRUQLAR VA MENYULAR ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    if require_subscription(message): return 
+    
     chat_id = message.chat.id
     first_name = message.from_user.first_name
     args = message.text.split()
@@ -210,6 +235,7 @@ def send_welcome(message):
 
 @bot.message_handler(commands=['top'])
 def cmd_top(message):
+    if require_subscription(message): return
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT first_name, total_correct FROM user_stats ORDER BY total_correct DESC LIMIT 10")
@@ -281,10 +307,12 @@ def cmd_delvip(message):
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
+    if require_subscription(message): return
     bot.send_message(message.chat.id, "📖 **Fayl formati:**\n\n`1. Savol matni`\n`+ To'g'ri javob`\n`- Noto'g'ri javob`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['restart'])
 def cmd_restart(message):
+    if require_subscription(message): return
     chat_id = message.chat.id
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
@@ -298,27 +326,29 @@ def cmd_restart(message):
 def cmd_finish(message):
     chat_id = message.chat.id
     data = user_data.get(chat_id)
-    if data and 'selected_questions' in data:
+    if data and data.get('selected_questions'):
         correct = data.get('correct_count', 0)
         total = len(data['selected_questions'])
         percentage = int((correct / total) * 100) if total > 0 else 0
-        bot.send_message(chat_id, f"🛑 **Test yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)", parse_mode="Markdown")
+        data['active_poll_id'] = None 
         data['last_batch'] = data['selected_questions']
+        data['selected_questions'] = [] 
+        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)", parse_mode="Markdown")
         check_remaining_and_ask(chat_id)
     else:
-        bot.send_message(chat_id, "ℹ️ Faol test yo'q.")
+        bot.send_message(chat_id, "ℹ️ Hozirda hech qanday faol test yo'q.")
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
-    chat_id = message.chat.id
+    if require_subscription(message): return 
     
-    # VIP bo'lmasa, fayl yuklaganda urinish tekshiriladi
+    chat_id = message.chat.id
     if not check_vip_status(chat_id):
         trials = get_trials_left(chat_id)
         if trials <= 0:
             send_payment_msg(chat_id)
             return
-        use_trial(chat_id) # Urinishni bittaga kamaytiramiz
+        use_trial(chat_id)
 
     file_info = bot.get_file(message.document.file_id)
     file_ext = os.path.splitext(message.document.file_name)[1].lower()
@@ -348,6 +378,14 @@ def handle_document(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
     chat_id = call.message.chat.id
+    
+    if call.data == "check_sub_btn":
+        if check_channel_sub(call.from_user.id):
+            bot.delete_message(chat_id, call.message.message_id)
+            bot.send_message(chat_id, "✅ Rahmat! Kanalga a'zo bo'ldingiz.\nEndi botdan bemalol foydalanishingiz mumkin. Boshlash uchun /start ni bosing.")
+        else:
+            bot.answer_callback_query(call.id, "❌ Hali kanalga a'zo bo'lmadingiz! Iltimos, a'zo bo'lib keyin tugmani bosing.", show_alert=True)
+        return
     
     if call.data == "upload_prompt":
         bot.send_message(chat_id, "📂 **Iltimos, menga test savollari bor faylni yuboring!**\n(.txt, .docx, .pdf yoki .xlsx formatlarida)", parse_mode="Markdown")
@@ -481,7 +519,7 @@ def handle_poll_answer(poll_answer):
     if data and data.get('active_poll_id') == poll_answer.poll_id:
         if poll_answer.option_ids[0] == data.get('current_correct_id'):
             data['correct_count'] = data.get('correct_count', 0) + 1
-            add_correct_answer(chat_id) # Reyting uchun to'g'ri javobni bazaga yozish
+            add_correct_answer(chat_id)
         data['active_poll_id'] = None
         data['current_index'] += 1
         send_next_question(chat_id)
