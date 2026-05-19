@@ -7,7 +7,7 @@ import http.server
 import socketserver
 
 # --- ASOSIY SOZLAMALAR ---
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # <-- O'Z TOKENINGIZNI SHU YERGA YOZING!
+TOKEN = "8917939430:AAFjPYX4eZd_Cqf5ACreLL5JufZ3McfK1No"  # <-- O'Z TOKENINGIZNI SHU YERGA YOZING!
 ADMIN_ID = 6638229765          # Sizning Admin ID raqamingiz
 
 bot = telebot.TeleBot(TOKEN)
