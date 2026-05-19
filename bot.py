@@ -3,7 +3,7 @@ import sqlite3
 from telebot import TeleBot, types
 
 # --- ASOSIY SOZLAMALAR ---
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # Bu yerga botingiz tokenini qo'ying
+TOKEN = "8917939430:AAFjPYX4eZd_Cqf5ACreLL5JufZ3McfK1No"  # Bu yerga botingiz tokenini qo'ying
 ADMIN_ID = 6638229765          # Sizning Admin ID raqamingiz
 
 bot = TeleBot(TOKEN)
