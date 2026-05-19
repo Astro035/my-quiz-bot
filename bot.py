@@ -12,7 +12,8 @@ import PyPDF2
 import pandas as pd
 from datetime import datetime
 
-TOKEN = '8917939430:AAG-VKEGYcfTZKf2XyPQBv6IcQW_xGnT4hU'
+# O'ZINGIZNING ENG OXIRGI YANGI TOKENINGIZNI SHU YERGA QO'YING:
+TOKEN = '8917939430:AAGfZtgH6TEB1lq4Nvq-vPxw4wQDBQBavvM' 
 bot = telebot.TeleBot(TOKEN)
 bot_info = bot.get_me()
 
@@ -39,7 +40,6 @@ threading.Thread(target=run_dummy_server, daemon=True).start()
 
 # --- MENYUNI SOZLASH ---
 def set_bot_menu():
-    # 1. Oddiy foydalanuvchilar uchun menyu (/stat yashirilgan)
     public_commands = [
         types.BotCommand("start", "Botni ishga tushirish"),
         types.BotCommand("top", "🏆 Eng kuchli bilimdonlar reytingi"),
@@ -49,10 +49,8 @@ def set_bot_menu():
     ]
     bot.set_my_commands(public_commands)
     
-    # 2. Faqat siz (Admin) uchun maxsus menyu (/stat qo'shilgan)
     admin_commands = public_commands.copy()
     admin_commands.append(types.BotCommand("stat", "👑 Admin Panel"))
-    
     try:
         bot.set_my_commands(admin_commands, scope=types.BotCommandScopeChat(ADMIN_ID))
     except Exception:
@@ -71,7 +69,7 @@ def smart_truncate(text, max_length=100, suffix='...'):
 
 # --- BAZA SOZLAMALARI ---
 def init_db():
-    conn = sqlite3.connect('bot_database.db')
+    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (user_id INTEGER, question_text TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS vip_users (user_id INTEGER PRIMARY KEY, is_vip INTEGER DEFAULT 0)''')
@@ -83,7 +81,6 @@ def init_db():
                         referrals_count INTEGER DEFAULT 0,
                         join_date DATE DEFAULT CURRENT_DATE
                     )''')
-    # Dinamik kanallar uchun jadval
     cursor.execute('''CREATE TABLE IF NOT EXISTS channels (
                         channel_id TEXT PRIMARY KEY,
                         channel_title TEXT,
@@ -105,7 +102,6 @@ def check_vip_status(user_id):
     return bool(row and row[0] == 1)
 
 def check_all_subscriptions(user_id):
-    """Bazada bor barcha kanallarga obunani tekshiradi"""
     if user_id == ADMIN_ID: return True
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
@@ -132,11 +128,9 @@ def require_subscription(message):
     if unsubscribed is not True and len(unsubscribed) > 0:
         markup = types.InlineKeyboardMarkup(row_width=1)
         text = "🛑 **Diqqat!**\n\nBotdan foydalanish uchun quyidagi rasmiy kanallarimizga a'zo bo'lishingiz shart:\n\n"
-        
         for idx, (ch_title, ch_link) in enumerate(unsubscribed, 1):
             text += f"{idx}. {ch_title}\n"
             markup.add(types.InlineKeyboardButton(f"📢 {ch_title} ga o'tish", url=ch_link))
-            
         markup.add(types.InlineKeyboardButton("✅ A'zo bo'ldim", callback_data="check_sub_btn"))
         bot.send_message(chat_id, text, reply_markup=markup, parse_mode="Markdown")
         return True 
@@ -239,7 +233,7 @@ def send_welcome(message):
     if require_subscription(message): return 
     
     chat_id = message.chat.id
-    first_name = message.from_user.first_name
+    first_name = message.from_user.first_name if message.from_user.first_name else "Do'stim"
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
@@ -285,7 +279,6 @@ def cmd_top(message):
         
     bot.send_message(message.chat.id, text, parse_mode="Markdown")
 
-# --- 👑 INTEGRATSIYA: ADMIN PANEL & STATISTIKA ---
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     if message.chat.id != ADMIN_ID: return
@@ -297,7 +290,6 @@ def cmd_stat(message):
     today_users = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM vip_users WHERE is_vip = 1")
     vip_users = cursor.fetchone()[0]
-    
     cursor.execute("SELECT COUNT(*) FROM channels")
     total_channels = cursor.fetchone()[0]
     conn.close()
@@ -311,7 +303,6 @@ def cmd_stat(message):
         f"📢 Majburiy kanallar: **{total_channels} ta**\n\n"
         "Quyidagi tugmalar orqali botni boshqarishingiz mumkin:"
     )
-    
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📢 Xabar tarqatish", callback_data="admin_broadcast"),
@@ -326,32 +317,57 @@ def cmd_stat(message):
 @bot.message_handler(commands=['addvip'])
 def cmd_addvip(message):
     if message.chat.id != ADMIN_ID: return
+    
+    # 1. ID formatini alohida tekshiramiz
     try:
         target_id = int(message.text.split()[1])
+    except (IndexError, ValueError):
+        bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/addvip USER_ID`\nID faqat raqamlardan iborat bo'lishi kerak.", parse_mode="Markdown")
+        return
+
+    # 2. Bazaga yozish (Bu aniq ishlaydi)
+    try:
         conn = sqlite3.connect('bot_database.db')
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO vip_users (user_id, is_vip) VALUES (?, 1)", (target_id,))
         conn.commit()
         conn.close()
-        bot.send_message(ADMIN_ID, f"✅ Foydalanuvchi `{target_id}` VIP tizimiga qo'shildi!", parse_mode="Markdown")
-        bot.send_message(target_id, "🎉 **Ajoyib xushxabar!**\n\nTo'lovingiz tasdiqlandi. Botdan umrbod cheksiz foydalanish huquqiga ega bo'ldingiz! 🚀")
+        bot.send_message(ADMIN_ID, f"✅ Foydalanuvchi `{target_id}` VIP tizimiga muvaffaqiyatli qo'shildi!", parse_mode="Markdown")
+    except Exception as e:
+        bot.send_message(ADMIN_ID, f"❌ Baza xatoligi yuz berdi: {e}")
+        return
+
+    # 3. Foydalanuvchiga xabar yuborish (Agar bloklagan bo'lsa, xato bermaydi)
+    try:
+        bot.send_message(target_id, "🎉 **Ajoyib xushxabar!**\n\nTo'lovingiz tasdiqlandi. Botdan umrbod cheksiz foydalanish huquqiga ega bo'ldingiz! 🚀", parse_mode="Markdown")
     except Exception:
-        bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/addvip USER_ID`", parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, "⚠️ *Diqqat: Mijozga VIP berildi, lekin unga xabar bormadi. Chunki u botni bloklagan yoki umuman start bosmagan.*", parse_mode="Markdown")
 
 @bot.message_handler(commands=['delvip'])
 def cmd_delvip(message):
     if message.chat.id != ADMIN_ID: return
+    
     try:
         target_id = int(message.text.split()[1])
+    except (IndexError, ValueError):
+        bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/delvip USER_ID`", parse_mode="Markdown")
+        return
+
+    try:
         conn = sqlite3.connect('bot_database.db')
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO vip_users (user_id, is_vip) VALUES (?, 0)", (target_id,))
         conn.commit()
         conn.close()
         bot.send_message(ADMIN_ID, f"❌ Foydalanuvchi `{target_id}` VIP tizimidan o'chirildi!", parse_mode="Markdown")
-        bot.send_message(target_id, "⚠️ **Ogohlantirish!**\nSizning VIP maqomingiz to'xtatildi. Botdan foydalanish uchun qayta to'lov qilishingiz kerak.")
+    except Exception as e:
+        bot.send_message(ADMIN_ID, f"❌ Baza xatoligi: {e}")
+        return
+
+    try:
+        bot.send_message(target_id, "⚠️ **Ogohlantirish!**\nSizning VIP maqomingiz to'xtatildi. Botdan foydalanish uchun qayta to'lov qilishingiz kerak.", parse_mode="Markdown")
     except Exception:
-        bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/delvip USER_ID`", parse_mode="Markdown")
+        pass # Bloklagan bo'lsa, indamaymiz
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
@@ -370,7 +386,6 @@ def cmd_restart(message):
     if chat_id in user_data: del user_data[chat_id]
     bot.send_message(chat_id, "🔄 **Tarix tozalandi!**\nBarcha savollar boshidan beriladi.")
 
-# --- 🔄 INTEGRATSIYA: CHALA QOLGAN SAVOLLARNI TARIXDAN TOZALASH ---
 @bot.message_handler(commands=['finish'])
 def cmd_finish(message):
     chat_id = message.chat.id
@@ -381,7 +396,6 @@ def cmd_finish(message):
         current_idx = data.get('current_index', 0)
         percentage = int((correct / total) * 100) if total > 0 else 0
         
-        # CHALA QOLGAN TESTLARNI TARIXDAN TOZALASH
         unanswered_questions = data['selected_questions'][current_idx:]
         if unanswered_questions:
             conn = sqlite3.connect('bot_database.db')
@@ -394,7 +408,6 @@ def cmd_finish(message):
         data['active_poll_id'] = None 
         data['last_batch'] = data['selected_questions'][:current_idx] 
         data['selected_questions'] = [] 
-        
         bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{current_idx}** ({percentage}%)\n⚠️ Yechishga ulgurmagan testlaringiz umumiy balansga muvaffaqiyatli qaytarildi.", parse_mode="Markdown")
         check_remaining_and_ask(chat_id)
     else:
@@ -432,7 +445,13 @@ def handle_document(message):
         bot.send_message(chat_id, "❌ Fayldan test topilmadi. Format to'g'riligiga ishonch hosil qiling.")
         return
 
-    user_data[chat_id] = {'all_questions': questions}
+    # BO'SH O'ZGARUVCHILARDAN HIMOYALANGAN ZIRH
+    user_data[chat_id] = {
+        'all_questions': questions,
+        'count': 30, # Default qotib qolmasligi uchun
+        'time': 15   # Default qotib qolmasligi uchun
+    }
+    
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("30 ta", callback_data="count_30"), types.InlineKeyboardButton("50 ta", callback_data="count_50"))
     bot.send_message(chat_id, f"✅ Jami **{len(questions)}** ta test topildi.\nNechta test yechasiz?", reply_markup=markup, parse_mode="Markdown")
@@ -444,7 +463,8 @@ def handle_query(call):
     if call.data == "check_sub_btn":
         unsubscribed = check_all_subscriptions(call.from_user.id)
         if unsubscribed is True or len(unsubscribed) == 0:
-            bot.delete_message(chat_id, call.message.message_id)
+            try: bot.delete_message(chat_id, call.message.message_id)
+            except: pass
             bot.send_message(chat_id, "✅ Rahmat! Barcha kanallarga a'zo bo'ldingiz.\nEndi botdan bemalol foydalanishingiz mumkin. Boshlash uchun /start ni bosing.")
         else:
             bot.answer_callback_query(call.id, "❌ Hali barcha kanallarga a'zo bo'lmadingiz! Iltimos, tekshirib qaytadan urinib ko'ring.", show_alert=True)
@@ -460,7 +480,6 @@ def handle_query(call):
         bot.answer_callback_query(call.id)
         return
 
-    # --- ADMIN CALLBACK MANTIQLARI ---
     elif call.data == "admin_broadcast":
         bot.answer_callback_query(call.id)
         msg = bot.send_message(chat_id, "📢 **Reklama xabarini yuboring.**\n\nSiz yuborgan xabar (matn, rasm yoki video) botning barcha foydalanuvchilariga yuboriladi. Bekor qilish uchun /cancel deb yozing.")
@@ -486,11 +505,9 @@ def handle_query(call):
         cursor.execute("SELECT channel_id, channel_title FROM channels")
         channels = cursor.fetchall()
         conn.close()
-        
         if not channels:
             bot.send_message(chat_id, "📭 Bazada hech qanday kanal yo'q.")
             return
-            
         markup = types.InlineKeyboardMarkup(row_width=1)
         for ch in channels:
             markup.add(types.InlineKeyboardButton(f"❌ {ch[1]}", callback_data=f"delch_{ch[0]}"))
@@ -508,9 +525,11 @@ def handle_query(call):
         return
 
     elif call.data.startswith("count_") or call.data == "retry_last":
-        bot.delete_message(chat_id, call.message.message_id)
+        try: bot.delete_message(chat_id, call.message.message_id)
+        except: pass
         
         if call.data.startswith("count_"):
+            if chat_id not in user_data: return
             user_data[chat_id]['count'] = int(call.data.split("_")[1])
             markup = types.InlineKeyboardMarkup(row_width=3)
             markup.add(*[types.InlineKeyboardButton(f"{t} s", callback_data=f"time_{t}") for t in [5, 10, 15, 20, 25, 30]])
@@ -528,12 +547,13 @@ def handle_query(call):
                 bot.send_message(chat_id, "❌ Qayta ishlash uchun test topilmadi.")
 
     elif call.data.startswith("time_"):
+        try: bot.delete_message(chat_id, call.message.message_id)
+        except: pass
+        if chat_id not in user_data: return
         user_data[chat_id]['time'] = int(call.data.split("_")[1])
-        bot.delete_message(chat_id, call.message.message_id)
         bot.send_message(chat_id, "🚀 Test boshlanmoqda...")
         prepare_quiz(chat_id)
 
-# --- ADMIN KANAL VA REKLAMA FUNKSIYALARI ---
 def process_add_channel(message):
     if message.chat.id != ADMIN_ID: return
     try:
@@ -541,41 +561,33 @@ def process_add_channel(message):
         ch_id = parts[0].strip()
         ch_title = parts[1].strip()
         ch_link = parts[2].strip()
-        
         conn = sqlite3.connect('bot_database.db')
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO channels (channel_id, channel_title, channel_invite_link) VALUES (?, ?, ?)", (ch_id, ch_title, ch_link))
         conn.commit()
         conn.close()
-        
-        bot.send_message(message.chat.id, f"✅ **{ch_title}** kanali bazaga muvaffaqiyatli qo'shildi!\n\n⚠️ Diqqat: Bot o'sha kanalda admin ekanligini tekshirishni unutmang, aks holda tekshiruv ishlamaydi.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"✅ **{ch_title}** kanali bazaga muvaffaqiyatli qo'shildi!", parse_mode="Markdown")
     except Exception:
-        bot.send_message(message.chat.id, "❌ Xatolik! Format noto'g'ri yuborildi. Iltimos, qaytadan `ID | Nomi | Ssilka` formatida urinib ko'ring.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "❌ Xatolik! Format noto'g'ri yuborildi.", parse_mode="Markdown")
 
 def process_admin_broadcast(message):
     if message.chat.id != ADMIN_ID: return
     if message.text == '/cancel':
         bot.send_message(ADMIN_ID, "❌ Reklama yuborish bekor qilindi.")
         return
-
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM user_stats")
     all_users = cursor.fetchall()
     conn.close()
-
     bot.send_message(ADMIN_ID, f"🚀 **{len(all_users)} ta** foydalanuvchiga reklama yuborish boshlandi...")
-    success = 0
-    failed = 0
-
+    success, failed = 0, 0
     for user in all_users:
         try:
             bot.copy_message(chat_id=user[0], from_chat_id=ADMIN_ID, message_id=message.message_id)
             success += 1
-        except Exception:
-            failed += 1
-
-    bot.send_message(ADMIN_ID, f"✅ **Yuborish yakunlandi!**\n\n🟢 Muvaffaqiyatli: {success} ta\n🔴 Yetkazilmadi (bloklaganlar): {failed} ta")
+        except Exception: failed += 1
+    bot.send_message(ADMIN_ID, f"✅ **Yuborish yakunlandi!**\n🟢 Muvaffaqiyatli: {success} ta\n🔴 Yetkazilmadi: {failed} ta")
 
 def prepare_quiz(chat_id):
     data = user_data.get(chat_id)
@@ -585,13 +597,14 @@ def prepare_quiz(chat_id):
     cursor.execute("SELECT question_text FROM history WHERE user_id=?", (chat_id,))
     history = [row[0] for row in cursor.fetchall()]
 
-    new_questions = [q for q in data['all_questions'] if q['text'] not in history]
+    new_questions = [q for q in data.get('all_questions', []) if q['text'] not in history]
     if not new_questions:
         bot.send_message(chat_id, "🎉 Barcha testlarni yechib bo'lgansiz! Tarixni tozalash: /restart")
         conn.close()
         return
 
-    selected = random.sample(new_questions, min(data['count'], len(new_questions)))
+    count = data.get('count', 30)
+    selected = random.sample(new_questions, min(count, len(new_questions)))
     for q in selected: cursor.execute("INSERT INTO history (user_id, question_text) VALUES (?, ?)", (chat_id, q['text']))
     conn.commit()
     conn.close()
@@ -606,39 +619,52 @@ def send_next_question(chat_id):
     data = user_data.get(chat_id)
     if not data: return
     
-    idx = data['current_index']
-    questions = data['selected_questions']
+    idx = data.get('current_index', 0)
+    questions = data.get('selected_questions', [])
     
     if idx >= len(questions):
         correct = data.get('correct_count', 0)
         total = len(questions)
         percentage = int((correct / total) * 100) if total > 0 else 0
         data['last_batch'] = questions 
-        
         bot.send_message(chat_id, f"🏁 **Test yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)\n", parse_mode="Markdown")
         check_remaining_and_ask(chat_id)
         return
 
     q = questions[idx]
-    options = [smart_truncate(opt) for opt in q['options'][:10]]
+    
+    # 🛑 JAVOBLAR BIR XIL BO'LIB QOLISHIDAN (CRASH) HIMOYA 
+    raw_options = []
+    for opt in q['options']:
+        safe_opt = smart_truncate(opt)
+        if safe_opt not in raw_options:  # Faqat takrorlanmaganlarini olamiz
+            raw_options.append(safe_opt)
+            
+    if len(raw_options) < 2:  # Agar javob qolmasa o'tkazib yuboramiz
+        data['current_index'] += 1
+        send_next_question(chat_id)
+        return
+
+    options = raw_options[:10]
     correct_ans = smart_truncate(q['correct']) if q['correct'] else ""
     random.shuffle(options)
     correct_id = options.index(correct_ans) if correct_ans in options else 0
     data['current_correct_id'] = correct_id
 
     try:
-        msg = bot.send_poll(chat_id, q['text'][:300], options, type='quiz', correct_option_id=correct_id, is_anonymous=False, open_period=data['time'])
+        time_limit = data.get('time', 15)
+        msg = bot.send_poll(chat_id, q['text'][:300], options, type='quiz', correct_option_id=correct_id, is_anonymous=False, open_period=time_limit)
         data['active_poll_id'] = msg.poll.id
         poll_to_user[msg.poll.id] = chat_id
-        threading.Timer(data['time'] + 1.5, auto_force_next, args=[chat_id, idx, msg.poll.id]).start()
-    except Exception:
+        threading.Timer(time_limit + 1.5, auto_force_next, args=[chat_id, idx, msg.poll.id]).start()
+    except Exception as e:
+        # Telegram API bu savolni yoqtirmasa, bot jim qotmaydi, keyingisiga o'tadi
         data['current_index'] += 1
         send_next_question(chat_id)
 
 def check_remaining_and_ask(chat_id):
     data = user_data.get(chat_id)
     if not data or 'all_questions' not in data: return
-
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT question_text FROM history WHERE user_id=?", (chat_id,))
@@ -668,9 +694,7 @@ def auto_force_next(chat_id, expected_idx, poll_id):
             cursor.execute("DELETE FROM history WHERE user_id=? AND question_text=?", (chat_id, current_q['text']))
             conn.commit()
             conn.close()
-        except Exception:
-            pass
-
+        except Exception: pass
         data['active_poll_id'] = None
         data['current_index'] += 1
         send_next_question(chat_id)
