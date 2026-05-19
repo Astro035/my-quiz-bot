@@ -19,7 +19,7 @@ bot_info = bot.get_me()
 # =====================================================================
 # ⚙️ VIP VA TO'LOV SOZLAMALARI
 # =====================================================================
-ADMIN_ID = 123456789  # 🔥 DIQQAT: O'zingizning ID raqamingizni yozing!
+ADMIN_ID = 6638229765  # 🔥 DIQQAT: O'zingizning ID raqamingizni yozing!
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
