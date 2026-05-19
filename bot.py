@@ -12,7 +12,7 @@ import PyPDF2
 import pandas as pd
 from datetime import datetime
 
-TOKEN = '8917939430:AAFjPYX4eZd_Cqf5ACreLL5JufZ3McfK1No'
+TOKEN = '8917939430:AAG-VKEGYcfTZKf2XyPQBv6IcQW_xGnT4hU'
 bot = telebot.TeleBot(TOKEN)
 bot_info = bot.get_me()
 
