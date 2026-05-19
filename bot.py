@@ -520,8 +520,9 @@ def handle_poll_answer(poll_answer):
         if poll_answer.option_ids[0] == data.get('current_correct_id'):
             data['correct_count'] = data.get('correct_count', 0) + 1
             add_correct_answer(chat_id)
-        data['active_poll_id'] = None
+        data['active_poll_id'] = None        
         data['current_index'] += 1
         send_next_question(chat_id)
 
-bot.polling(none_stop=True)
+if __name__ == "__main__":
+    bot.infinity_polling(none_stop=True)
