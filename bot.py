@@ -12,22 +12,17 @@ import PyPDF2
 import pandas as pd
 from datetime import datetime
 
-TOKEN = '8917939430:AAFjPYX4eZd_Cqf5ACreLL5JufZ3McfK1No'
-bot = telebot.TeleBot(TOKEN)
-bot_info = bot.get_me()
-
 # =====================================================================
 # ⚙️ ASOSIY SOZLAMALAR
 # =====================================================================
+TOKEN = '8917939430:AAFjPYX4eZd_Cqf5ACreLL5JufZ3McfK1No' # Tokenni xavfsizlik uchun almashtirishni unutmang
+bot = telebot.TeleBot(TOKEN)
+bot_info = bot.get_me()
+
 ADMIN_ID = 6638229765  
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
-
-# 📢 MAJBURIY OBUNA KANALI
-CHANNEL_ID = '-1003501768656' # Yopiq kanallar uchun doim -100 bilan boshlanadi
-CHANNEL_LINK = 'https://t.me/+1fIB8_JwBso2OWEy' # Kanal ssilkasi
-# =====================================================================
 
 # =====================================================================
 # 🌐 RENDER PLATFORMASI UCHUN VEB-PORT TIZIMI
@@ -39,8 +34,10 @@ def run_dummy_server():
         httpd.serve_forever()
 
 threading.Thread(target=run_dummy_server, daemon=True).start()
-# =====================================================================
 
+# =====================================================================
+# MENYU SOZLAMALARI VA O'ZGARUVCHILAR
+# =====================================================================
 def set_bot_menu():
     commands = [
         types.BotCommand("start", "Botni ishga tushirish"),
@@ -76,6 +73,7 @@ def init_db():
                         referrals_count INTEGER DEFAULT 0,
                         join_date DATE DEFAULT CURRENT_DATE
                     )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS channels (channel_id TEXT PRIMARY KEY, channel_link TEXT)''')
     conn.commit()
     conn.close()
 
@@ -91,23 +89,35 @@ def check_vip_status(user_id):
     conn.close()
     return bool(row and row[0] == 1)
 
-def check_channel_sub(user_id):
-    if user_id == ADMIN_ID: return True
-    try:
-        status = bot.get_chat_member(CHANNEL_ID, user_id).status
-        return status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        return False 
-
 def require_subscription(message):
     chat_id = message.chat.id
-    if not check_channel_sub(chat_id):
+    if chat_id == ADMIN_ID: return False
+    
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT channel_id, channel_link FROM channels")
+    channels = cursor.fetchall()
+    conn.close()
+    
+    if not channels:
+        return False 
+        
+    not_subscribed = []
+    for ch_id, link in channels:
+        try:
+            status = bot.get_chat_member(ch_id, chat_id).status
+            if status not in ['member', 'administrator', 'creator']:
+                not_subscribed.append((ch_id, link))
+        except Exception:
+            not_subscribed.append((ch_id, link))
+            
+    if not_subscribed:
         markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("📢 Kanalga a'zo bo'lish", url=CHANNEL_LINK),
-            types.InlineKeyboardButton("✅ A'zo bo'ldim", callback_data="check_sub_btn")
-        )
-        bot.send_message(chat_id, "🛑 **Diqqat!**\n\nBotdan foydalanish uchun avvalo rasmiy kanalimizga a'zo bo'lishingiz shart. A'zo bo'lgach, pastdagi tugmani bosing.", reply_markup=markup, parse_mode="Markdown")
+        for i, (ch_id, link) in enumerate(not_subscribed, 1):
+            markup.add(types.InlineKeyboardButton(f"📢 {i}-kanalga a'zo bo'lish", url=link))
+        markup.add(types.InlineKeyboardButton("✅ A'zo bo'ldim", callback_data="check_sub_btn"))
+        
+        bot.send_message(chat_id, "🛑 **Diqqat!**\n\nBotdan foydalanish uchun quyidagi kanallarga a'zo bo'lishingiz shart. A'zo bo'lgach, pastdagi tugmani bosing.", reply_markup=markup, parse_mode="Markdown")
         return True 
     return False 
 
@@ -305,6 +315,56 @@ def cmd_delvip(message):
     except Exception:
         bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/delvip USER_ID`", parse_mode="Markdown")
 
+# --- MAJBURU Y KANALLARNI BOSHQARISH (ADMIN UCHUN) ---
+@bot.message_handler(commands=['addchannel'])
+def cmd_addchannel(message):
+    if message.chat.id != ADMIN_ID: return
+    try:
+        args = message.text.split()
+        ch_id = args[1]
+        ch_link = args[2]
+        
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR REPLACE INTO channels (channel_id, channel_link) VALUES (?, ?)", (ch_id, ch_link))
+        conn.commit()
+        conn.close()
+        bot.send_message(ADMIN_ID, f"✅ Majburiy kanal qo'shildi!\n\n🆔 ID: `{ch_id}`\n🔗 Link: {ch_link}", parse_mode="Markdown")
+    except Exception:
+        bot.send_message(ADMIN_ID, "❌ Xatolik!\nFormat quyidagicha bo'lishi kerak:\n`/addchannel -100123456789 https://t.me/kanal_linki`", parse_mode="Markdown")
+
+@bot.message_handler(commands=['delchannel'])
+def cmd_delchannel(message):
+    if message.chat.id != ADMIN_ID: return
+    try:
+        ch_id = message.text.split()[1]
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM channels WHERE channel_id=?", (ch_id,))
+        conn.commit()
+        conn.close()
+        bot.send_message(ADMIN_ID, f"🗑 Kanal bazadan o'chirildi: `{ch_id}`", parse_mode="Markdown")
+    except Exception:
+        bot.send_message(ADMIN_ID, "❌ Xatolik!\nFormat: `/delchannel -100123456789`", parse_mode="Markdown")
+
+@bot.message_handler(commands=['channels'])
+def cmd_channels(message):
+    if message.chat.id != ADMIN_ID: return
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT channel_id, channel_link FROM channels")
+    channels = cursor.fetchall()
+    conn.close()
+    
+    if not channels:
+        bot.send_message(ADMIN_ID, "📭 Hozircha majburiy kanallar yo'q.")
+        return
+        
+    text = "📢 **Majburiy kanallar ro'yxati:**\n\n"
+    for i, (ch_id, link) in enumerate(channels, 1):
+        text += f"{i}. 🆔 `{ch_id}`\n🔗 {link}\n\n"
+    bot.send_message(ADMIN_ID, text, parse_mode="Markdown", disable_web_page_preview=True)
+
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
     if require_subscription(message): return
@@ -327,13 +387,22 @@ def cmd_finish(message):
     chat_id = message.chat.id
     data = user_data.get(chat_id)
     if data and data.get('selected_questions'):
+        attempted = data.get('current_index', 0) 
+        
+        if attempted == 0:
+            bot.send_message(chat_id, "ℹ️ Siz hali birorta ham test ishlamadingiz.")
+            data['active_poll_id'] = None 
+            data['selected_questions'] = []
+            return
+            
         correct = data.get('correct_count', 0)
-        total = len(data['selected_questions'])
-        percentage = int((correct / total) * 100) if total > 0 else 0
+        percentage = int((correct / attempted) * 100) if attempted > 0 else 0
+        
         data['active_poll_id'] = None 
-        data['last_batch'] = data['selected_questions']
+        data['last_batch'] = data['selected_questions'][:attempted] 
         data['selected_questions'] = [] 
-        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)", parse_mode="Markdown")
+        
+        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{attempted}** ({percentage}%)", parse_mode="Markdown")
         check_remaining_and_ask(chat_id)
     else:
         bot.send_message(chat_id, "ℹ️ Hozirda hech qanday faol test yo'q.")
@@ -361,8 +430,12 @@ def handle_document(message):
     file_path = f"temp_{chat_id}{file_ext}"
     with open(file_path, 'wb') as f: f.write(downloaded_file)
 
-    text = extract_text_from_file(file_path, file_ext)
-    os.remove(file_path)
+    try:
+        text = extract_text_from_file(file_path, file_ext)
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            
     questions = parse_questions(text)
     bot.delete_message(chat_id, msg.message_id)
     
@@ -380,11 +453,28 @@ def handle_query(call):
     chat_id = call.message.chat.id
     
     if call.data == "check_sub_btn":
-        if check_channel_sub(call.from_user.id):
+        conn = sqlite3.connect('bot_database.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT channel_id FROM channels")
+        channels = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        
+        all_subscribed = True
+        for ch_id in channels:
+            try:
+                status = bot.get_chat_member(ch_id, call.from_user.id).status
+                if status not in ['member', 'administrator', 'creator']:
+                    all_subscribed = False
+                    break
+            except:
+                all_subscribed = False
+                break
+                
+        if all_subscribed:
             bot.delete_message(chat_id, call.message.message_id)
-            bot.send_message(chat_id, "✅ Rahmat! Kanalga a'zo bo'ldingiz.\nEndi botdan bemalol foydalanishingiz mumkin. Boshlash uchun /start ni bosing.")
+            bot.send_message(chat_id, "✅ Rahmat! Kanallarga a'zo bo'ldingiz.\nEndi botdan bemalol foydalanishingiz mumkin. Boshlash uchun /start ni bosing.")
         else:
-            bot.answer_callback_query(call.id, "❌ Hali kanalga a'zo bo'lmadingiz! Iltimos, a'zo bo'lib keyin tugmani bosing.", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Hali hamma kanallarga a'zo bo'lmadingiz! Iltimos, a'zo bo'lib keyin tugmani bosing.", show_alert=True)
         return
     
     if call.data == "upload_prompt":
@@ -432,15 +522,13 @@ def prepare_quiz(chat_id):
     history = [row[0] for row in cursor.fetchall()]
 
     new_questions = [q for q in data['all_questions'] if q['text'] not in history]
+    conn.close()
+
     if not new_questions:
         bot.send_message(chat_id, "🎉 Barcha testlarni yechib bo'lgansiz! Tarixni tozalash: /restart")
-        conn.close()
         return
 
     selected = random.sample(new_questions, min(data['count'], len(new_questions)))
-    for q in selected: cursor.execute("INSERT INTO history (user_id, question_text) VALUES (?, ?)", (chat_id, q['text']))
-    conn.commit()
-    conn.close()
 
     data['selected_questions'] = selected
     data['current_index'] = 0
@@ -466,6 +554,15 @@ def send_next_question(chat_id):
         return
 
     q = questions[idx]
+    
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM history WHERE user_id=? AND question_text=?", (chat_id, q['text']))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO history (user_id, question_text) VALUES (?, ?)", (chat_id, q['text']))
+        conn.commit()
+    conn.close()
+
     options = [smart_truncate(opt) for opt in q['options'][:10]]
     correct_ans = smart_truncate(q['correct']) if q['correct'] else ""
     random.shuffle(options)
