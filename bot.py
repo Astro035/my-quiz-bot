@@ -4,18 +4,22 @@ import sqlite3
 import random
 import re
 import os
-import time
 import threading
 import http.server
 import socketserver
+import docx
+import PyPDF2
+import pandas as pd
+from datetime import datetime
 
 TOKEN = '8917939430:AAFjPYX4eZd_Cqf5ACreLL5JufZ3McfK1No'
 bot = telebot.TeleBot(TOKEN)
+bot_info = bot.get_me()
 
 # =====================================================================
 # ⚙️ VIP VA TO'LOV SOZLAMALARI
 # =====================================================================
-ADMIN_ID = 6638229765  # 🔥 DIQQAT: Bu yerga o'zingizning raqamli ID'ingizni yozing!
+ADMIN_ID = 123456789  # 🔥 DIQQAT: O'zingizning ID raqamingizni yozing!
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
@@ -33,15 +37,12 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 # =====================================================================
 
-import docx
-import PyPDF2
-import pandas as pd
-
 def set_bot_menu():
     commands = [
-        types.BotCommand("start", "Botni boshlash"),
-        types.BotCommand("help", "Instruktsiya va fayl formati"),
-        types.BotCommand("restart", "Tarixni tozalash"),
+        types.BotCommand("start", "Botni ishga tushirish"),
+        types.BotCommand("top", "🏆 Eng kuchli bilimdonlar reytingi"),
+        types.BotCommand("help", "Fayl formati qoidalari"),
+        types.BotCommand("restart", "Yechilgan testlar tarixini tozalash"),
         types.BotCommand("finish", "Faol quizni yakunlash")
     ]
     bot.set_my_commands(commands)
@@ -57,18 +58,26 @@ def smart_truncate(text, max_length=100, suffix='...'):
     last_space = truncated.rfind(' ')
     return (truncated[:last_space] + suffix) if last_space != -1 else (truncated + suffix)
 
-# --- BAZA SOZLAMALARI VA FREEMIUM TIZIMI ---
+# --- BAZA SOZLAMALARI ---
 def init_db():
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (user_id INTEGER, question_text TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS vip_users (user_id INTEGER PRIMARY KEY, is_vip INTEGER DEFAULT 0)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS free_trials (user_id INTEGER PRIMARY KEY)''') # Yangi bepul urinish bazasi
+    cursor.execute('''CREATE TABLE IF NOT EXISTS user_stats (
+                        user_id INTEGER PRIMARY KEY, 
+                        first_name TEXT,
+                        trials_left INTEGER DEFAULT 1, 
+                        total_correct INTEGER DEFAULT 0,
+                        referrals_count INTEGER DEFAULT 0,
+                        join_date DATE DEFAULT CURRENT_DATE
+                    )''')
     conn.commit()
     conn.close()
 
 init_db()
 
+# --- FOYDALANUVCHI FUNKSIYALARI ---
 def check_vip_status(user_id):
     if user_id == ADMIN_ID: return True
     conn = sqlite3.connect('bot_database.db')
@@ -78,25 +87,53 @@ def check_vip_status(user_id):
     conn.close()
     return bool(row and row[0] == 1)
 
-def is_trial_used(user_id):
+def get_or_create_user(user_id, first_name, referrer_id=None):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM free_trials WHERE user_id=?", (user_id,))
-    used = cursor.fetchone()
+    cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=?", (user_id,))
+    user = cursor.fetchone()
+    
+    if not user:
+        cursor.execute("INSERT INTO user_stats (user_id, first_name) VALUES (?, ?)", (user_id, first_name))
+        conn.commit()
+        # Referal tizimi
+        if referrer_id and referrer_id != user_id:
+            cursor.execute("UPDATE user_stats SET referrals_count = referrals_count + 1 WHERE user_id=?", (referrer_id,))
+            conn.commit()
+            cursor.execute("SELECT referrals_count FROM user_stats WHERE user_id=?", (referrer_id,))
+            ref_count = cursor.fetchone()[0]
+            if ref_count % 3 == 0:
+                cursor.execute("UPDATE user_stats SET trials_left = trials_left + 1 WHERE user_id=?", (referrer_id,))
+                conn.commit()
+                bot.send_message(referrer_id, "🎉 **Tabriklaymiz!** Siz 3 ta do'stingizni taklif qildingiz va yana **+1 ta BEPUL fayl yuklash** urinishini qo'lga kiritdingiz!", parse_mode="Markdown")
     conn.close()
-    return used is not None
 
-def mark_trial_used(user_id):
+def get_trials_left(user_id):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO free_trials (user_id) VALUES (?)", (user_id,))
+    cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
+def use_trial(user_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE user_stats SET trials_left = trials_left - 1 WHERE user_id=? AND trials_left > 0", (user_id,))
+    conn.commit()
+    conn.close()
+
+def add_correct_answer(user_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("UPDATE user_stats SET total_correct = total_correct + 1 WHERE user_id=?", (user_id,))
     conn.commit()
     conn.close()
 
 def send_payment_msg(chat_id):
     pay_text = (
-        "🔒 <b>Bepul urinishingiz tugadi!</b>\n\n"
-        "Botga test fayllarini yuklash va telegramda cheksiz yechish <b>umrbod faqat 5 000 so'm</b>.\n\n"
+        "🔒 <b>Urinishlaringiz tugadi!</b>\n\n"
+        "Botga o'z test fayllaringizni yuklash va telegramda cheksiz yechish <b>umrbod faqat 5 000 so'm</b>.\n\n"
         f"💳 <b>Karta:</b> <code>{CARD_NUMBER}</code>\n"
         f"🏦 <b>Ega:</b> {BANK_NAME}\n\n"
         f"📌 To'lov qilib chekni {ADMIN_USERNAME} ga yuboring va pasdagi ID'ingizni qo'shib yozing.\n\n"
@@ -142,22 +179,75 @@ def parse_questions(text):
     if current_q and len(current_q['options']) >= 2: questions.append(current_q)
     return questions
 
-# --- MENYU VA BUYRUQLAR ---
+# --- BUYRUQLAR VA MENYULAR ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
+    chat_id = message.chat.id
+    first_name = message.from_user.first_name
+    args = message.text.split()
+    referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
+    
+    get_or_create_user(chat_id, first_name, referrer_id)
+    is_vip = check_vip_status(chat_id)
+    
+    if is_vip:
+        text = f"👑 **Assalomu alaykum, {first_name}! VIP profilga xush kelibsiz!**\n\nSiz botdan umrbod va cheksiz foydalanish huquqiga egasiz. Test boshlash uchun shunchaki fayl yuboring."
+        bot.send_message(chat_id, text, parse_mode='Markdown')
+    else:
+        trials = get_trials_left(chat_id)
+        ref_link = f"https://t.me/{bot_info.username}?start={chat_id}"
+        text = (
+            f"👋 **Assalomu alaykum, {first_name}! Quiz Botga xush kelibsiz!**\n\n"
+            "Bu bot orqali o'z test fayllaringizni (.txt, .docx, .pdf, .xlsx) yuklab, qulay taymerli quiz shaklida yechishingiz mumkin.\n\n"
+            f"🎁 **Sizda qolgan bepul urinishlar:** {trials} ta\n\n"
+            f"🤝 **Do'stlarni taklif qiling!** Ushbu ssilka orqali 3 ta do'stingiz botga kirsa, yana 1 ta BEPUL urinish olasiz:\n`{ref_link}`"
+        )
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        if trials > 0:
+            markup.add(types.InlineKeyboardButton("🚀 Test faylini yuklash va boshlash", callback_data="upload_prompt"))
+        markup.add(types.InlineKeyboardButton("💎 VIP xarid qilish (Cheksiz)", callback_data="buy_vip"))
+        bot.send_message(chat_id, text, reply_markup=markup, parse_mode='Markdown')
+
+@bot.message_handler(commands=['top'])
+def cmd_top(message):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT first_name, total_correct FROM user_stats ORDER BY total_correct DESC LIMIT 10")
+    top_users = cursor.fetchall()
+    conn.close()
+    
+    if not top_users:
+        bot.send_message(message.chat.id, "Hozircha reyting bo'sh.")
+        return
+        
+    text = "🏆 **ENG KUCHLI BILIMDONLAR TOP-10 REYTINGI:**\n\n"
+    medals = ['🥇', '🥈', '🥉']
+    for i, user in enumerate(top_users):
+        medal = medals[i] if i < 3 else "🔸"
+        text += f"{medal} {user[0]} - {user[1]} ta to'g'ri javob\n"
+        
+    bot.send_message(message.chat.id, text, parse_mode="Markdown")
+
+@bot.message_handler(commands=['stat'])
+def cmd_stat(message):
+    if message.chat.id != ADMIN_ID: return
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM user_stats")
+    total_users = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM user_stats WHERE join_date = CURRENT_DATE")
+    today_users = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM vip_users WHERE is_vip = 1")
+    vip_users = cursor.fetchone()[0]
+    conn.close()
+    
     text = (
-        "👋 **Assalomu alaykum! Quiz Botga xush kelibsiz!**\n\n"
-        "Bu bot orqali siz turli formatdagi (.txt, .docx, .pdf, .xlsx) test fayllarini yuklab, "
-        "ularni qulay taymerli quiz shaklida yechishingiz mumkin.\n\n"
-        "🎁 *Sizda birinchi test (30 yoki 50 talik) mutlaqo BEPUL!*\n\n"
-        "Qani, tayyor bo'lsangiz bilimingizni sinab ko'ramizmi?"
+        "📊 **BOT STATISTIKASI:**\n\n"
+        f"👥 Jami foydalanuvchilar: **{total_users}**\n"
+        f"🆕 Bugun qo'shilganlar: **{today_users}**\n"
+        f"💎 VIP mijozlar: **{vip_users}**"
     )
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("🚀 Test faylini yuklash va boshlash", callback_data="upload_prompt"),
-        types.InlineKeyboardButton("💎 VIP xarid qilish (Cheksiz)", callback_data="buy_vip")
-    )
-    bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='Markdown')
+    bot.send_message(ADMIN_ID, text, parse_mode="Markdown")
 
 @bot.message_handler(commands=['addvip'])
 def cmd_addvip(message):
@@ -222,11 +312,13 @@ def cmd_finish(message):
 def handle_document(message):
     chat_id = message.chat.id
     
-    # VIP bo'lmasa va bepul urinish ishlatilgan bo'lsa, fayl yuklashni to'sib qo'yamiz
+    # VIP bo'lmasa, fayl yuklaganda urinish tekshiriladi
     if not check_vip_status(chat_id):
-        if is_trial_used(chat_id):
+        trials = get_trials_left(chat_id)
+        if trials <= 0:
             send_payment_msg(chat_id)
             return
+        use_trial(chat_id) # Urinishni bittaga kamaytiramiz
 
     file_info = bot.get_file(message.document.file_id)
     file_ext = os.path.splitext(message.document.file_name)[1].lower()
@@ -245,7 +337,7 @@ def handle_document(message):
     bot.delete_message(chat_id, msg.message_id)
     
     if not questions:
-        bot.send_message(chat_id, "❌ Fayldan test topilmadi.")
+        bot.send_message(chat_id, "❌ Fayldan test topilmadi. Format to'g'riligiga ishonch hosil qiling.")
         return
 
     user_data[chat_id] = {'all_questions': questions}
@@ -268,17 +360,6 @@ def handle_query(call):
         return
 
     elif call.data.startswith("count_") or call.data == "retry_last":
-        # 🛡️ FREEMIUM TEKSHIRUVI: Test boshlanishidan oldin to'siq
-        if not check_vip_status(chat_id):
-            if is_trial_used(chat_id):
-                bot.delete_message(chat_id, call.message.message_id)
-                send_payment_msg(chat_id)
-                return
-            else:
-                # Agar trial ishlatilmagan bo'lsa, uni ishlatildi deb belgilaymiz
-                mark_trial_used(chat_id)
-                bot.send_message(chat_id, "🎁 **Diqqat! Siz 1 martalik bepul urinishingizdan foydalanmoqdasiz.** Omadingizni bersin!")
-
         bot.delete_message(chat_id, call.message.message_id)
         
         if call.data.startswith("count_"):
@@ -400,6 +481,7 @@ def handle_poll_answer(poll_answer):
     if data and data.get('active_poll_id') == poll_answer.poll_id:
         if poll_answer.option_ids[0] == data.get('current_correct_id'):
             data['correct_count'] = data.get('correct_count', 0) + 1
+            add_correct_answer(chat_id) # Reyting uchun to'g'ri javobni bazaga yozish
         data['active_poll_id'] = None
         data['current_index'] += 1
         send_next_question(chat_id)
