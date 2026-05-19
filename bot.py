@@ -15,7 +15,7 @@ bot = telebot.TeleBot(TOKEN)
 # =====================================================================
 # ⚙️ VIP VA TO'LOV SOZLAMALARI
 # =====================================================================
-ADMIN_ID =  6638229765 # 🔥 DIQQAT: Bu yerga o'zingizning raqamli ID'ingizni yozing!
+ADMIN_ID = 6638229765  # 🔥 DIQQAT: Bu yerga o'zingizning raqamli ID'ingizni yozing!
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
@@ -40,10 +40,9 @@ import pandas as pd
 def set_bot_menu():
     commands = [
         types.BotCommand("start", "Botni boshlash"),
-        types.BotCommand("quiz", "Quizni boshlash"),
         types.BotCommand("help", "Instruktsiya va fayl formati"),
-        types.BotCommand("restart", "Quizni qayta boshlash (Tarixni tozalash)"),
-        types.BotCommand("finish", "Faol quizni muddatidan oldin yakunlash")
+        types.BotCommand("restart", "Tarixni tozalash"),
+        types.BotCommand("finish", "Faol quizni yakunlash")
     ]
     bot.set_my_commands(commands)
 
@@ -53,19 +52,18 @@ user_data = {}
 poll_to_user = {}
 
 def smart_truncate(text, max_length=100, suffix='...'):
-    if len(text) <= max_length:
-        return text
+    if len(text) <= max_length: return text
     truncated = text[:max_length - len(suffix)]
     last_space = truncated.rfind(' ')
-    if last_space != -1:
-        return truncated[:last_space] + suffix
-    return truncated + suffix
+    return (truncated[:last_space] + suffix) if last_space != -1 else (truncated + suffix)
 
+# --- BAZA SOZLAMALARI VA FREEMIUM TIZIMI ---
 def init_db():
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (user_id INTEGER, question_text TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS vip_users (user_id INTEGER PRIMARY KEY, is_vip INTEGER DEFAULT 0)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS free_trials (user_id INTEGER PRIMARY KEY)''') # Yangi bepul urinish bazasi
     conn.commit()
     conn.close()
 
@@ -78,9 +76,35 @@ def check_vip_status(user_id):
     cursor.execute("SELECT is_vip FROM vip_users WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
     conn.close()
-    if row and row[0] == 1: return True
-    return False
+    return bool(row and row[0] == 1)
 
+def is_trial_used(user_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM free_trials WHERE user_id=?", (user_id,))
+    used = cursor.fetchone()
+    conn.close()
+    return used is not None
+
+def mark_trial_used(user_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO free_trials (user_id) VALUES (?)", (user_id,))
+    conn.commit()
+    conn.close()
+
+def send_payment_msg(chat_id):
+    pay_text = (
+        "🔒 <b>Bepul urinishingiz tugadi!</b>\n\n"
+        "Botga test fayllarini yuklash va telegramda cheksiz yechish <b>umrbod faqat 5 000 so'm</b>.\n\n"
+        f"💳 <b>Karta:</b> <code>{CARD_NUMBER}</code>\n"
+        f"🏦 <b>Ega:</b> {BANK_NAME}\n\n"
+        f"📌 To'lov qilib chekni {ADMIN_USERNAME} ga yuboring va pasdagi ID'ingizni qo'shib yozing.\n\n"
+        f"🆔 Sizning ID raqamingiz: <code>{chat_id}</code>"
+    )
+    bot.send_message(chat_id, pay_text, parse_mode='HTML')
+
+# --- FAYL O'QISH ---
 def extract_text_from_file(file_path, file_ext):
     text = ""
     try:
@@ -103,8 +127,7 @@ def extract_text_from_file(file_path, file_ext):
 def parse_questions(text):
     questions = []
     current_q = None
-    lines = text.split('\n')
-    for line in lines:
+    for line in text.split('\n'):
         line = line.strip()
         if not line: continue
         if re.match(r'^\d+\s*\.', line):
@@ -115,17 +138,27 @@ def parse_questions(text):
             current_q['options'].append(ans)
             current_q['correct'] = ans
         elif line.startswith('-') and current_q:
-            ans = line[1:].strip()
-            current_q['options'].append(ans)
+            current_q['options'].append(line[1:].strip())
     if current_q and len(current_q['options']) >= 2: questions.append(current_q)
     return questions
 
+# --- MENYU VA BUYRUQLAR ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    text = "📝 **Assalomu alaykum! Quiz Botga xush kelibsiz.**\n\nBotdan mutlaqo cheksiz foydalanish va testlarni telegramga yuklash uchun menyudan foydalaning yoki to'g'ridan-to'g'ri fayl yuboring."
-    bot.send_message(message.chat.id, text, parse_mode='Markdown')
+    text = (
+        "👋 **Assalomu alaykum! Quiz Botga xush kelibsiz!**\n\n"
+        "Bu bot orqali siz turli formatdagi (.txt, .docx, .pdf, .xlsx) test fayllarini yuklab, "
+        "ularni qulay taymerli quiz shaklida yechishingiz mumkin.\n\n"
+        "🎁 *Sizda birinchi test (30 yoki 50 talik) mutlaqo BEPUL!*\n\n"
+        "Qani, tayyor bo'lsangiz bilimingizni sinab ko'ramizmi?"
+    )
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton("🚀 Test faylini yuklash va boshlash", callback_data="upload_prompt"),
+        types.InlineKeyboardButton("💎 VIP xarid qilish (Cheksiz)", callback_data="buy_vip")
+    )
+    bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='Markdown')
 
-# 🔥 VIP QO'SHISH BUYRUG'I
 @bot.message_handler(commands=['addvip'])
 def cmd_addvip(message):
     if message.chat.id != ADMIN_ID: return
@@ -138,10 +171,9 @@ def cmd_addvip(message):
         conn.close()
         bot.send_message(ADMIN_ID, f"✅ Foydalanuvchi `{target_id}` VIP tizimiga qo'shildi!", parse_mode="Markdown")
         bot.send_message(target_id, "🎉 **Ajoyib xushxabar!**\n\nTo'lovingiz tasdiqlandi. Botdan umrbod cheksiz foydalanish huquqiga ega bo'ldingiz! 🚀")
-    except Exception as e:
+    except Exception:
         bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/addvip USER_ID`", parse_mode="Markdown")
 
-# 🔥 VIP O'CHIRISH BUYRUG'I
 @bot.message_handler(commands=['delvip'])
 def cmd_delvip(message):
     if message.chat.id != ADMIN_ID: return
@@ -152,19 +184,14 @@ def cmd_delvip(message):
         cursor.execute("INSERT OR REPLACE INTO vip_users (user_id, is_vip) VALUES (?, 0)", (target_id,))
         conn.commit()
         conn.close()
-        bot.send_message(ADMIN_ID, f"❌ Foydalanuvchi `{target_id}` VIP tizimidan muvaffaqiyatli o'chirildi!", parse_mode="Markdown")
-        bot.send_message(target_id, "⚠️ **Ogohlantirish!**\n\nSizning VIP maqomingiz admin tomonidan to'xtatildi. Botdan foydalanish uchun qayta to'lov qilishingiz kerak.")
-    except Exception as e:
+        bot.send_message(ADMIN_ID, f"❌ Foydalanuvchi `{target_id}` VIP tizimidan o'chirildi!", parse_mode="Markdown")
+        bot.send_message(target_id, "⚠️ **Ogohlantirish!**\nSizning VIP maqomingiz to'xtatildi. Botdan foydalanish uchun qayta to'lov qilishingiz kerak.")
+    except Exception:
         bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/delvip USER_ID`", parse_mode="Markdown")
-
-@bot.message_handler(commands=['quiz'])
-def cmd_quiz(message):
-    bot.send_message(message.chat.id, "📚 **Quiz boshlash uchun menga test faylini yuboring!**")
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
-    text = "📖 **Fayl formati bo'yicha yo'riqnoma:**\n\n`1. Savol matni`\n`+ To'g'ri javob`\n`- Noto'g'ri javob`\n`- Noto'g'ri javob`"
-    bot.send_message(message.chat.id, text, parse_mode='Markdown')
+    bot.send_message(message.chat.id, "📖 **Fayl formati:**\n\n`1. Savol matni`\n`+ To'g'ri javob`\n`- Noto'g'ri javob`", parse_mode='Markdown')
 
 @bot.message_handler(commands=['restart'])
 def cmd_restart(message):
@@ -175,7 +202,7 @@ def cmd_restart(message):
     conn.commit()
     conn.close()
     if chat_id in user_data: del user_data[chat_id]
-    bot.send_message(chat_id, "🔄 **Siz yechgan testlar tarixi tozalandi!**\n\nEndi barcha savollar boshidan beriladi.")
+    bot.send_message(chat_id, "🔄 **Tarix tozalandi!**\nBarcha savollar boshidan beriladi.")
 
 @bot.message_handler(commands=['finish'])
 def cmd_finish(message):
@@ -185,26 +212,21 @@ def cmd_finish(message):
         correct = data.get('correct_count', 0)
         total = len(data['selected_questions'])
         percentage = int((correct / total) * 100) if total > 0 else 0
-        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)", parse_mode="Markdown")
+        bot.send_message(chat_id, f"🛑 **Test yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)", parse_mode="Markdown")
         data['last_batch'] = data['selected_questions']
         check_remaining_and_ask(chat_id)
     else:
-        bot.send_message(chat_id, "ℹ️ Hozirda hech qanday faol test yo'q.")
+        bot.send_message(chat_id, "ℹ️ Faol test yo'q.")
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     chat_id = message.chat.id
+    
+    # VIP bo'lmasa va bepul urinish ishlatilgan bo'lsa, fayl yuklashni to'sib qo'yamiz
     if not check_vip_status(chat_id):
-        pay_text = (
-            "🔒 <b>Botdan foydalanish cheklangan!</b>\n\n"
-            "Botga test fayllarini yuklash va telegramda cheksiz yechish <b>umrbod faqat 5 000 so'm</b>.\n\n"
-            f"💳 <b>Karta:</b> <code>{CARD_NUMBER}</code>\n"
-            f"🏦 <b>Ega:</b> {BANK_NAME}\n\n"
-            f"📌 To'lov qilib chekni {ADMIN_USERNAME} ga yuboring va pasdagi ID'ingizni qo'shib yozing.\n\n"
-            f"🆔 Sizning ID raqamingiz: <code>{chat_id}</code>"
-        )
-        bot.send_message(chat_id, pay_text, parse_mode='HTML')
-        return
+        if is_trial_used(chat_id):
+            send_payment_msg(chat_id)
+            return
 
     file_info = bot.get_file(message.document.file_id)
     file_ext = os.path.splitext(message.document.file_name)[1].lower()
@@ -234,31 +256,53 @@ def handle_document(message):
 @bot.callback_query_handler(func=lambda call: True)
 def handle_query(call):
     chat_id = call.message.chat.id
-    if call.data.startswith("count_"):
-        user_data[chat_id]['count'] = int(call.data.split("_")[1])
+    
+    if call.data == "upload_prompt":
+        bot.send_message(chat_id, "📂 **Iltimos, menga test savollari bor faylni yuboring!**\n(.txt, .docx, .pdf yoki .xlsx formatlarida)", parse_mode="Markdown")
+        bot.answer_callback_query(call.id)
+        return
+        
+    elif call.data == "buy_vip":
+        send_payment_msg(chat_id)
+        bot.answer_callback_query(call.id)
+        return
+
+    elif call.data.startswith("count_") or call.data == "retry_last":
+        # 🛡️ FREEMIUM TEKSHIRUVI: Test boshlanishidan oldin to'siq
+        if not check_vip_status(chat_id):
+            if is_trial_used(chat_id):
+                bot.delete_message(chat_id, call.message.message_id)
+                send_payment_msg(chat_id)
+                return
+            else:
+                # Agar trial ishlatilmagan bo'lsa, uni ishlatildi deb belgilaymiz
+                mark_trial_used(chat_id)
+                bot.send_message(chat_id, "🎁 **Diqqat! Siz 1 martalik bepul urinishingizdan foydalanmoqdasiz.** Omadingizni bersin!")
+
         bot.delete_message(chat_id, call.message.message_id)
-        markup = types.InlineKeyboardMarkup(row_width=3)
-        markup.add(*[types.InlineKeyboardButton(f"{t} s", callback_data=f"time_{t}") for t in [5, 10, 15, 20, 25, 30]])
-        bot.send_message(chat_id, "⏱ Taymer qancha bo'lsin?", reply_markup=markup)
+        
+        if call.data.startswith("count_"):
+            user_data[chat_id]['count'] = int(call.data.split("_")[1])
+            markup = types.InlineKeyboardMarkup(row_width=3)
+            markup.add(*[types.InlineKeyboardButton(f"{t} s", callback_data=f"time_{t}") for t in [5, 10, 15, 20, 25, 30]])
+            bot.send_message(chat_id, "⏱ Taymer qancha bo'lsin?", reply_markup=markup)
+            
+        elif call.data == "retry_last":
+            if 'last_batch' in user_data.get(chat_id, {}):
+                user_data[chat_id]['selected_questions'] = user_data[chat_id]['last_batch']
+                user_data[chat_id]['current_index'] = 0
+                user_data[chat_id]['correct_count'] = 0
+                user_data[chat_id]['active_poll_id'] = None
+                bot.send_message(chat_id, "🚀 **Xatolar ustida ishlash:** Test qayta boshlanmoqda...", parse_mode="Markdown")
+                send_next_question(chat_id)
+            else:
+                bot.send_message(chat_id, "❌ Qayta ishlash uchun test topilmadi.")
 
     elif call.data.startswith("time_"):
         user_data[chat_id]['time'] = int(call.data.split("_")[1])
         bot.delete_message(chat_id, call.message.message_id)
         bot.send_message(chat_id, "🚀 Test boshlanmoqda...")
         prepare_quiz(chat_id)
-        
-    # 🔥 YANGI QO'SHILGAN: Qayta ishlash logikasi
-    elif call.data == "retry_last":
-        bot.delete_message(chat_id, call.message.message_id)
-        if 'last_batch' in user_data.get(chat_id, {}):
-            user_data[chat_id]['selected_questions'] = user_data[chat_id]['last_batch']
-            user_data[chat_id]['current_index'] = 0
-            user_data[chat_id]['correct_count'] = 0
-            user_data[chat_id]['active_poll_id'] = None
-            bot.send_message(chat_id, "🚀 **Xatolar ustida ishlash:** Hozirgi testlar qayta boshlanmoqda...", parse_mode="Markdown")
-            send_next_question(chat_id)
-        else:
-            bot.send_message(chat_id, "❌ Qayta ishlash uchun xotirada test topilmadi.")
 
 def prepare_quiz(chat_id):
     data = user_data.get(chat_id)
@@ -270,7 +314,7 @@ def prepare_quiz(chat_id):
 
     new_questions = [q for q in data['all_questions'] if q['text'] not in history]
     if not new_questions:
-        bot.send_message(chat_id, "🎉 Siz fayldagi barcha testlarni yechib bo'lgansiz! Tarixni tozalash uchun /restart bosing.")
+        bot.send_message(chat_id, "🎉 Barcha testlarni yechib bo'lgansiz! Tarixni tozalash: /restart")
         conn.close()
         return
 
@@ -296,8 +340,6 @@ def send_next_question(chat_id):
         correct = data.get('correct_count', 0)
         total = len(questions)
         percentage = int((correct / total) * 100) if total > 0 else 0
-        
-        # 🔥 Test tugagach qilingan testlarni eslab qolamiz
         data['last_batch'] = questions 
         
         bot.send_message(chat_id, f"🏁 **Test yakunlandi!**\n📊 Natijangiz: **{correct}/{total}** ({percentage}%)\n", parse_mode="Markdown")
@@ -316,7 +358,7 @@ def send_next_question(chat_id):
         data['active_poll_id'] = msg.poll.id
         poll_to_user[msg.poll.id] = chat_id
         threading.Timer(data['time'] + 1.5, auto_force_next, args=[chat_id, idx, msg.poll.id]).start()
-    except Exception as e:
+    except Exception:
         data['current_index'] += 1
         send_next_question(chat_id)
 
@@ -331,7 +373,6 @@ def check_remaining_and_ask(chat_id):
     conn.close()
 
     remaining = [q for q in data['all_questions'] if q['text'] not in history]
-
     markup = types.InlineKeyboardMarkup()
     btn_retry = types.InlineKeyboardButton("🔄 Hozirgisini qayta ishlash", callback_data="retry_last")
 
