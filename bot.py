@@ -76,11 +76,19 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS user_stats (
                         user_id INTEGER PRIMARY KEY, 
                         first_name TEXT,
+                        username TEXT,
                         trials_left INTEGER DEFAULT 1, 
                         total_correct INTEGER DEFAULT 0,
                         referrals_count INTEGER DEFAULT 0,
                         join_date DATE DEFAULT CURRENT_DATE
                     )''')
+    
+    # Eskidan bor bazaga username ustunini qo'shish (Xato bermasligi uchun try-except)
+    try:
+        cursor.execute("ALTER TABLE user_stats ADD COLUMN username TEXT")
+    except Exception:
+        pass # Agar ustun allaqachon mavjud bo'lsa, jimgina o'tib ketadi
+        
     cursor.execute('''CREATE TABLE IF NOT EXISTS channels (
                         channel_id TEXT PRIMARY KEY,
                         channel_title TEXT,
@@ -136,14 +144,14 @@ def require_subscription(message):
         return True 
     return False 
 
-def get_or_create_user(user_id, first_name, referrer_id=None):
+def get_or_create_user(user_id, first_name, username, referrer_id=None):
     conn = sqlite3.connect('bot_database.db')
     cursor = conn.cursor()
     cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=?", (user_id,))
     user = cursor.fetchone()
     
     if not user:
-        cursor.execute("INSERT INTO user_stats (user_id, first_name) VALUES (?, ?)", (user_id, first_name))
+        cursor.execute("INSERT INTO user_stats (user_id, first_name, username) VALUES (?, ?, ?)", (user_id, first_name, username))
         conn.commit()
         if referrer_id and referrer_id != user_id:
             cursor.execute("UPDATE user_stats SET referrals_count = referrals_count + 1 WHERE user_id=?", (referrer_id,))
@@ -154,6 +162,11 @@ def get_or_create_user(user_id, first_name, referrer_id=None):
                 cursor.execute("UPDATE user_stats SET trials_left = trials_left + 1 WHERE user_id=?", (referrer_id,))
                 conn.commit()
                 bot.send_message(referrer_id, "🎉 **Tabriklaymiz!** Siz 3 ta do'stingizni taklif qildingiz va yana **+1 ta BEPUL fayl yuklash** urinishini qo'lga kiritdingiz!", parse_mode="Markdown")
+    else:
+        # Eski a'zolar qayta kirsayam, usernameni yangilab qo'yadi
+        cursor.execute("UPDATE user_stats SET username = ? WHERE user_id = ?", (username, user_id))
+        conn.commit()
+        
     conn.close()
 
 def get_trials_left(user_id):
@@ -234,10 +247,12 @@ def send_welcome(message):
     
     chat_id = message.chat.id
     first_name = message.from_user.first_name if message.from_user.first_name else "Do'stim"
+    username = f"@{message.from_user.username}" if message.from_user.username else "Yo'q"
+    
     args = message.text.split()
     referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
-    get_or_create_user(chat_id, first_name, referrer_id)
+    get_or_create_user(chat_id, first_name, username, referrer_id)
     is_vip = check_vip_status(chat_id)
     
     if is_vip:
@@ -312,20 +327,20 @@ def cmd_stat(message):
         types.InlineKeyboardButton("➕ Kanal qo'shish", callback_data="admin_add_ch"),
         types.InlineKeyboardButton("❌ Kanalni o'chirish", callback_data="admin_del_ch")
     )
+    markup.add(
+        types.InlineKeyboardButton("👥 Foydalanuvchilar Ro'yxati (Excel)", callback_data="admin_export_users")
+    )
     bot.send_message(ADMIN_ID, text, reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(commands=['addvip'])
 def cmd_addvip(message):
     if message.chat.id != ADMIN_ID: return
-    
-    # 1. ID formatini alohida tekshiramiz
     try:
         target_id = int(message.text.split()[1])
     except (IndexError, ValueError):
         bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/addvip USER_ID`\nID faqat raqamlardan iborat bo'lishi kerak.", parse_mode="Markdown")
         return
 
-    # 2. Bazaga yozish (Bu aniq ishlaydi)
     try:
         conn = sqlite3.connect('bot_database.db')
         cursor = conn.cursor()
@@ -337,7 +352,6 @@ def cmd_addvip(message):
         bot.send_message(ADMIN_ID, f"❌ Baza xatoligi yuz berdi: {e}")
         return
 
-    # 3. Foydalanuvchiga xabar yuborish (Agar bloklagan bo'lsa, xato bermaydi)
     try:
         bot.send_message(target_id, "🎉 **Ajoyib xushxabar!**\n\nTo'lovingiz tasdiqlandi. Botdan umrbod cheksiz foydalanish huquqiga ega bo'ldingiz! 🚀", parse_mode="Markdown")
     except Exception:
@@ -346,7 +360,6 @@ def cmd_addvip(message):
 @bot.message_handler(commands=['delvip'])
 def cmd_delvip(message):
     if message.chat.id != ADMIN_ID: return
-    
     try:
         target_id = int(message.text.split()[1])
     except (IndexError, ValueError):
@@ -367,7 +380,7 @@ def cmd_delvip(message):
     try:
         bot.send_message(target_id, "⚠️ **Ogohlantirish!**\nSizning VIP maqomingiz to'xtatildi. Botdan foydalanish uchun qayta to'lov qilishingiz kerak.", parse_mode="Markdown")
     except Exception:
-        pass # Bloklagan bo'lsa, indamaymiz
+        pass 
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
@@ -522,6 +535,29 @@ def handle_query(call):
         conn.commit()
         conn.close()
         bot.edit_message_text("✅ Kanal ro'yxatdan muvaffaqiyatli o'chirildi.", chat_id, call.message.message_id)
+        return
+
+    # EXCEL FAYL YARATISH FUNKSIYASI UCHUN:
+    elif call.data == "admin_export_users":
+        bot.answer_callback_query(call.id, "📊 Excel fayl tayyorlanmoqda. Kuting...")
+        try:
+            conn = sqlite3.connect('bot_database.db')
+            # Bazadan malumotlarni olamiz
+            df = pd.read_sql_query("SELECT user_id, first_name, username, trials_left, total_correct, referrals_count, join_date FROM user_stats", conn)
+            conn.close()
+            
+            # Excel jadval ustunlarini chiroyli ko'rinishga keltiramiz
+            df.columns = ['ID Raqami', 'Ism-Sharifi', 'Username', 'Qolgan Urinishlar', "To'g'ri Javoblar", 'Taklif Qilganlar', "Qo'shilgan Sana"]
+            
+            file_name = "Foydalanuvchilar_Royxati.xlsx"
+            df.to_excel(file_name, index=False)
+            
+            with open(file_name, 'rb') as f:
+                bot.send_document(ADMIN_ID, f, caption="👥 **Barcha foydalanuvchilar ro'yxati (Excel)**", parse_mode="Markdown")
+            
+            os.remove(file_name) # Xotira to'lib ketmasligi uchun jo'natib bo'lgach faylni o'chiramiz
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Fayl yaratishda xatolik: {e}")
         return
 
     elif call.data.startswith("count_") or call.data == "retry_last":
