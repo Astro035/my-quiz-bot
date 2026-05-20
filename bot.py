@@ -1,6 +1,7 @@
 import telebot
 from telebot import types
-import sqlite3
+import psycopg2
+from psycopg2.extras import DictCursor
 import random
 import re
 import os
@@ -12,19 +13,23 @@ import PyPDF2
 import pandas as pd
 from datetime import datetime
 
-# O'ZINGIZNING ENG OXIRGI YANGI TOKENINGIZNI SHU YERGA QO'YING:
+# =====================================================================
+# ⚙️ TOʻGʻRIDAN-TOʻGʻRI BULUTLI BAZA VA BOT SOZLAMALARI
+# =====================================================================
+# DIQQAT: Shu pastdagi joyga o'z tokeningizni qo'yishni unutmang!
 TOKEN = '8917939430:AAGfZtgH6TEB1lq4Nvq-vPxw4wQDBQBavvM' 
-bot = telebot.TeleBot(TOKEN)
-bot_info = bot.get_me()
 
-# =====================================================================
-# ⚙️ ASOSIY SOZLAMALAR
-# =====================================================================
+# Sizning tayyor Supabase havolangiz:
+DB_URI = "postgresql://postgres:Muzaffar%5F180305@db.sbnrvltrtyhydhbcatkd.supabase.co:5432/postgres"
+
 ADMIN_ID = 6638229765  
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
 ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
 # =====================================================================
+
+bot = telebot.TeleBot(TOKEN)
+bot_info = bot.get_me()
 
 # =====================================================================
 # 🌐 RENDER PLATFORMASI UCHUN VEB-PORT TIZIMI
@@ -38,7 +43,6 @@ def run_dummy_server():
 threading.Thread(target=run_dummy_server, daemon=True).start()
 # =====================================================================
 
-# --- MENYUNI SOZLASH ---
 def set_bot_menu():
     public_commands = [
         types.BotCommand("start", "Botni ishga tushirish"),
@@ -67,14 +71,24 @@ def smart_truncate(text, max_length=100, suffix='...'):
     last_space = truncated.rfind(' ')
     return (truncated[:last_space] + suffix) if last_space != -1 else (truncated + suffix)
 
-# --- BAZA SOZLAMALARI ---
+# --- BULUTLI DB BILAN BOGʻLANISH FUNKSIYALARI ---
+def get_db_connection():
+    return psycopg2.connect(DB_URI)
+
 def init_db():
-    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS history (user_id INTEGER, question_text TEXT)''')
-    cursor.execute('''CREATE TABLE IF NOT EXISTS vip_users (user_id INTEGER PRIMARY KEY, is_vip INTEGER DEFAULT 0)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS history (
+                        user_id BIGINT, 
+                        question_text TEXT,
+                        solved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS vip_users (
+                        user_id BIGINT PRIMARY KEY, 
+                        is_vip INTEGER DEFAULT 0
+                    )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS user_stats (
-                        user_id INTEGER PRIMARY KEY, 
+                        user_id BIGINT PRIMARY KEY, 
                         first_name TEXT,
                         username TEXT,
                         trials_left INTEGER DEFAULT 1, 
@@ -82,39 +96,49 @@ def init_db():
                         referrals_count INTEGER DEFAULT 0,
                         join_date DATE DEFAULT CURRENT_DATE
                     )''')
-    
-    # Eskidan bor bazaga username ustunini qo'shish (Xato bermasligi uchun try-except)
-    try:
-        cursor.execute("ALTER TABLE user_stats ADD COLUMN username TEXT")
-    except Exception:
-        pass # Agar ustun allaqachon mavjud bo'lsa, jimgina o'tib ketadi
-        
     cursor.execute('''CREATE TABLE IF NOT EXISTS channels (
                         channel_id TEXT PRIMARY KEY,
                         channel_title TEXT,
                         channel_invite_link TEXT
                     )''')
     conn.commit()
+    cursor.close()
     conn.close()
 
 init_db()
 
-# --- FOYDALANUVCHI VA OBUNA FUNKSIYALARI ---
+# 🔥 AQLLI TOZALAGICH
+def auto_clean_old_history():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM history WHERE solved_at < NOW() - INTERVAL '30 days'")
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("💡 1 oylik eski testlar tarixi muvaffaqiyatli tozalandi.")
+    except Exception as e:
+        print(f"Tozalashda xatolik: {e}")
+
+auto_clean_old_history()
+
 def check_vip_status(user_id):
     if user_id == ADMIN_ID: return True
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT is_vip FROM vip_users WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT is_vip FROM vip_users WHERE user_id=%s", (user_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     return bool(row and row[0] == 1)
 
 def check_all_subscriptions(user_id):
     if user_id == ADMIN_ID: return True
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT channel_id, channel_title, channel_invite_link FROM channels")
     channels = cursor.fetchall()
+    cursor.close()
     conn.close()
 
     if not channels: return True
@@ -145,50 +169,53 @@ def require_subscription(message):
     return False 
 
 def get_or_create_user(user_id, first_name, username, referrer_id=None):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=%s", (user_id,))
     user = cursor.fetchone()
     
     if not user:
-        cursor.execute("INSERT INTO user_stats (user_id, first_name, username) VALUES (?, ?, ?)", (user_id, first_name, username))
+        cursor.execute("INSERT INTO user_stats (user_id, first_name, username) VALUES (%s, %s, %s)", (user_id, first_name, username))
         conn.commit()
         if referrer_id and referrer_id != user_id:
-            cursor.execute("UPDATE user_stats SET referrals_count = referrals_count + 1 WHERE user_id=?", (referrer_id,))
+            cursor.execute("UPDATE user_stats SET referrals_count = referrals_count + 1 WHERE user_id=%s", (referrer_id,))
             conn.commit()
-            cursor.execute("SELECT referrals_count FROM user_stats WHERE user_id=?", (referrer_id,))
+            cursor.execute("SELECT referrals_count FROM user_stats WHERE user_id=%s", (referrer_id,))
             ref_count = cursor.fetchone()[0]
             if ref_count % 3 == 0:
-                cursor.execute("UPDATE user_stats SET trials_left = trials_left + 1 WHERE user_id=?", (referrer_id,))
+                cursor.execute("UPDATE user_stats SET trials_left = trials_left + 1 WHERE user_id=%s", (referrer_id,))
                 conn.commit()
-                bot.send_message(referrer_id, "🎉 **Tabriklaymiz!** Siz 3 ta do'stingizni taklif qildingiz va yana **+1 ta BEPUL fayl yuklash** urinishini qo'lga kiritdingiz!", parse_mode="Markdown")
+                try: bot.send_message(referrer_id, "🎉 **Tabriklaymiz!** Siz 3 ta do'stingizni taklif qildingiz va yana **+1 ta BEPUL fayl yuklash** urinishini qo'lga kiritdingiz!", parse_mode="Markdown")
+                except: pass
     else:
-        # Eski a'zolar qayta kirsayam, usernameni yangilab qo'yadi
-        cursor.execute("UPDATE user_stats SET username = ? WHERE user_id = ?", (username, user_id))
+        cursor.execute("UPDATE user_stats SET username = %s WHERE user_id = %s", (username, user_id))
         conn.commit()
-        
+    cursor.close()
     conn.close()
 
 def get_trials_left(user_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=?", (user_id,))
+    cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=%s", (user_id,))
     row = cursor.fetchone()
+    cursor.close()
     conn.close()
     return row[0] if row else 0
 
 def use_trial(user_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE user_stats SET trials_left = trials_left - 1 WHERE user_id=? AND trials_left > 0", (user_id,))
+    cursor.execute("UPDATE user_stats SET trials_left = trials_left - 1 WHERE user_id=%s AND trials_left > 0", (user_id,))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def add_correct_answer(user_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE user_stats SET total_correct = total_correct + 1 WHERE user_id=?", (user_id,))
+    cursor.execute("UPDATE user_stats SET total_correct = total_correct + 1 WHERE user_id=%s", (user_id,))
     conn.commit()
+    cursor.close()
     conn.close()
 
 def send_payment_msg(chat_id):
@@ -276,10 +303,11 @@ def send_welcome(message):
 @bot.message_handler(commands=['top'])
 def cmd_top(message):
     if require_subscription(message): return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT first_name, total_correct FROM user_stats ORDER BY total_correct DESC LIMIT 10")
     top_users = cursor.fetchall()
+    cursor.close()
     conn.close()
     
     if not top_users:
@@ -297,7 +325,9 @@ def cmd_top(message):
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     if message.chat.id != ADMIN_ID: return
-    conn = sqlite3.connect('bot_database.db')
+    auto_clean_old_history()
+    
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM user_stats")
     total_users = cursor.fetchone()[0]
@@ -307,6 +337,7 @@ def cmd_stat(message):
     vip_users = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM channels")
     total_channels = cursor.fetchone()[0]
+    cursor.close()
     conn.close()
     
     text = (
@@ -338,24 +369,23 @@ def cmd_addvip(message):
     try:
         target_id = int(message.text.split()[1])
     except (IndexError, ValueError):
-        bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/addvip USER_ID`\nID faqat raqamlardan iborat bo'lishi kerak.", parse_mode="Markdown")
+        bot.send_message(ADMIN_ID, "❌ Xatolik! Format: `/addvip USER_ID`", parse_mode="Markdown")
         return
 
     try:
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO vip_users (user_id, is_vip) VALUES (?, 1)", (target_id,))
+        cursor.execute("INSERT INTO vip_users (user_id, is_vip) VALUES (%s, 1) ON CONFLICT (user_id) DO UPDATE SET is_vip = 1", (target_id,))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.send_message(ADMIN_ID, f"✅ Foydalanuvchi `{target_id}` VIP tizimiga muvaffaqiyatli qo'shildi!", parse_mode="Markdown")
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Baza xatoligi yuz berdi: {e}")
         return
 
-    try:
-        bot.send_message(target_id, "🎉 **Ajoyib xushxabar!**\n\nTo'lovingiz tasdiqlandi. Botdan umrbod cheksiz foydalanish huquqiga ega bo'ldingiz! 🚀", parse_mode="Markdown")
-    except Exception:
-        bot.send_message(ADMIN_ID, "⚠️ *Diqqat: Mijozga VIP berildi, lekin unga xabar bormadi. Chunki u botni bloklagan yoki umuman start bosmagan.*", parse_mode="Markdown")
+    try: bot.send_message(target_id, "🎉 **Ajoyib xushxabar!**\n\nTo'lovingiz tasdiqlandi. Botdan umrbod cheksiz foydalanish huquqiga ega bo'ldingiz! 🚀", parse_mode="Markdown")
+    except: bot.send_message(ADMIN_ID, "⚠️ *Diqqat: Mijozga VIP berildi, lekin xabar bormadi (bloklagan).*")
 
 @bot.message_handler(commands=['delvip'])
 def cmd_delvip(message):
@@ -367,20 +397,19 @@ def cmd_delvip(message):
         return
 
     try:
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO vip_users (user_id, is_vip) VALUES (?, 0)", (target_id,))
+        cursor.execute("INSERT INTO vip_users (user_id, is_vip) VALUES (%s, 0) ON CONFLICT (user_id) DO UPDATE SET is_vip = 0", (target_id,))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.send_message(ADMIN_ID, f"❌ Foydalanuvchi `{target_id}` VIP tizimidan o'chirildi!", parse_mode="Markdown")
     except Exception as e:
         bot.send_message(ADMIN_ID, f"❌ Baza xatoligi: {e}")
         return
 
-    try:
-        bot.send_message(target_id, "⚠️ **Ogohlantirish!**\nSizning VIP maqomingiz to'xtatildi. Botdan foydalanish uchun qayta to'lov qilishingiz kerak.", parse_mode="Markdown")
-    except Exception:
-        pass 
+    try: bot.send_message(target_id, "⚠️ **Ogohlantirish!**\nSizning VIP maqomingiz to'xtatildi.", parse_mode="Markdown")
+    except: pass
 
 @bot.message_handler(commands=['help'])
 def cmd_help(message):
@@ -391,10 +420,11 @@ def cmd_help(message):
 def cmd_restart(message):
     if require_subscription(message): return
     chat_id = message.chat.id
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM history WHERE user_id=?", (chat_id,))
+    cursor.execute("DELETE FROM history WHERE user_id=%s", (chat_id,))
     conn.commit()
+    cursor.close()
     conn.close()
     if chat_id in user_data: del user_data[chat_id]
     bot.send_message(chat_id, "🔄 **Tarix tozalandi!**\nBarcha savollar boshidan beriladi.")
@@ -411,17 +441,18 @@ def cmd_finish(message):
         
         unanswered_questions = data['selected_questions'][current_idx:]
         if unanswered_questions:
-            conn = sqlite3.connect('bot_database.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             for q in unanswered_questions:
-                cursor.execute("DELETE FROM history WHERE user_id=? AND question_text=?", (chat_id, q['text']))
+                cursor.execute("DELETE FROM history WHERE user_id=%s AND question_text=%s", (chat_id, q['text']))
             conn.commit()
+            cursor.close()
             conn.close()
             
         data['active_poll_id'] = None 
         data['last_batch'] = data['selected_questions'][:current_idx] 
         data['selected_questions'] = [] 
-        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{current_idx}** ({percentage}%)\n⚠️ Yechishga ulgurmagan testlaringiz umumiy balansga muvaffaqiyatli qaytarildi.", parse_mode="Markdown")
+        bot.send_message(chat_id, f"🛑 **Test muddatidan oldin yakunlandi!**\n📊 Natijangiz: **{correct}/{current_idx}** ({percentage}%)\n⚠️ Yechishga ulgurmagan testlaringiz umumiy balansga qaytarildi.", parse_mode="Markdown")
         check_remaining_and_ask(chat_id)
     else:
         bot.send_message(chat_id, "ℹ️ Hozirda hech qanday faol test yo'q.")
@@ -458,13 +489,11 @@ def handle_document(message):
         bot.send_message(chat_id, "❌ Fayldan test topilmadi. Format to'g'riligiga ishonch hosil qiling.")
         return
 
-    # BO'SH O'ZGARUVCHILARDAN HIMOYALANGAN ZIRH
     user_data[chat_id] = {
         'all_questions': questions,
-        'count': 30, # Default qotib qolmasligi uchun
-        'time': 15   # Default qotib qolmasligi uchun
+        'count': 30, 
+        'time': 15   
     }
-    
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("30 ta", callback_data="count_30"), types.InlineKeyboardButton("50 ta", callback_data="count_50"))
     bot.send_message(chat_id, f"✅ Jami **{len(questions)}** ta test topildi.\nNechta test yechasiz?", reply_markup=markup, parse_mode="Markdown")
@@ -480,11 +509,11 @@ def handle_query(call):
             except: pass
             bot.send_message(chat_id, "✅ Rahmat! Barcha kanallarga a'zo bo'ldingiz.\nEndi botdan bemalol foydalanishingiz mumkin. Boshlash uchun /start ni bosing.")
         else:
-            bot.answer_callback_query(call.id, "❌ Hali barcha kanallarga a'zo bo'lmadingiz! Iltimos, tekshirib qaytadan urinib ko'ring.", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Hali barcha kanallarga a'zo bo'lmadingiz!", show_alert=True)
         return
     
-    if call.data == "upload_prompt":
-        bot.send_message(chat_id, "📂 **Iltimos, menga test savollari bor faylni yuboring!**\n(.txt, .docx, .pdf yoki .xlsx formatlarida)", parse_mode="Markdown")
+    elif call.data == "upload_prompt":
+        bot.send_message(chat_id, "📂 **Iltimos, menga test savollari bor faylni yuboring!**", parse_mode="Markdown")
         bot.answer_callback_query(call.id)
         return
         
@@ -495,7 +524,7 @@ def handle_query(call):
 
     elif call.data == "admin_broadcast":
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(chat_id, "📢 **Reklama xabarini yuboring.**\n\nSiz yuborgan xabar (matn, rasm yoki video) botning barcha foydalanuvchilariga yuboriladi. Bekor qilish uchun /cancel deb yozing.")
+        msg = bot.send_message(chat_id, "📢 **Reklama xabarini yuboring. Bekor qilish: /cancel**")
         bot.register_next_step_handler(msg, process_admin_broadcast)
         return
 
@@ -507,16 +536,17 @@ def handle_query(call):
 
     elif call.data == "admin_add_ch":
         bot.answer_callback_query(call.id)
-        msg = bot.send_message(chat_id, "➕ **Kanal qo'shish uchun ma'lumotni shu formatda yuboring:**\n\n`ID | Nomi | Ssilka`\n\nMisol:\n`-100123456789 | Mening Kanalim | https://t.me/+abcde`", parse_mode="Markdown")
+        msg = bot.send_message(chat_id, "➕ **Kanal qo'shish format:**\n\n`ID | Nomi | Ssilka`")
         bot.register_next_step_handler(msg, process_add_channel)
         return
 
     elif call.data == "admin_del_ch":
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT channel_id, channel_title FROM channels")
         channels = cursor.fetchall()
+        cursor.close()
         conn.close()
         if not channels:
             bot.send_message(chat_id, "📭 Bazada hech qanday kanal yo'q.")
@@ -529,33 +559,29 @@ def handle_query(call):
 
     elif call.data.startswith("delch_"):
         ch_id = call.data.split('_')[1]
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM channels WHERE channel_id = ?", (ch_id,))
+        cursor.execute("DELETE FROM channels WHERE channel_id = %s", (ch_id,))
         conn.commit()
+        cursor.close()
         conn.close()
         bot.edit_message_text("✅ Kanal ro'yxatdan muvaffaqiyatli o'chirildi.", chat_id, call.message.message_id)
         return
 
-    # EXCEL FAYL YARATISH FUNKSIYASI UCHUN:
     elif call.data == "admin_export_users":
-        bot.answer_callback_query(call.id, "📊 Excel fayl tayyorlanmoqda. Kuting...")
+        bot.answer_callback_query(call.id, "📊 Excel fayl tayyorlanmoqda...")
         try:
-            conn = sqlite3.connect('bot_database.db')
-            # Bazadan malumotlarni olamiz
+            conn = get_db_connection()
             df = pd.read_sql_query("SELECT user_id, first_name, username, trials_left, total_correct, referrals_count, join_date FROM user_stats", conn)
             conn.close()
             
-            # Excel jadval ustunlarini chiroyli ko'rinishga keltiramiz
             df.columns = ['ID Raqami', 'Ism-Sharifi', 'Username', 'Qolgan Urinishlar', "To'g'ri Javoblar", 'Taklif Qilganlar', "Qo'shilgan Sana"]
-            
             file_name = "Foydalanuvchilar_Royxati.xlsx"
             df.to_excel(file_name, index=False)
             
             with open(file_name, 'rb') as f:
                 bot.send_document(ADMIN_ID, f, caption="👥 **Barcha foydalanuvchilar ro'yxati (Excel)**", parse_mode="Markdown")
-            
-            os.remove(file_name) # Xotira to'lib ketmasligi uchun jo'natib bo'lgach faylni o'chiramiz
+            os.remove(file_name) 
         except Exception as e:
             bot.send_message(chat_id, f"❌ Fayl yaratishda xatolik: {e}")
         return
@@ -577,10 +603,8 @@ def handle_query(call):
                 user_data[chat_id]['current_index'] = 0
                 user_data[chat_id]['correct_count'] = 0
                 user_data[chat_id]['active_poll_id'] = None
-                bot.send_message(chat_id, "🚀 **Xatolar ustida ishlash:** Test qayta boshlanmoqda...", parse_mode="Markdown")
+                bot.send_message(chat_id, "🚀 **Xatolar ustida ishlash:** Qayta boshlanmoqda...", parse_mode="Markdown")
                 send_next_question(chat_id)
-            else:
-                bot.send_message(chat_id, "❌ Qayta ishlash uchun test topilmadi.")
 
     elif call.data.startswith("time_"):
         try: bot.delete_message(chat_id, call.message.message_id)
@@ -597,52 +621,56 @@ def process_add_channel(message):
         ch_id = parts[0].strip()
         ch_title = parts[1].strip()
         ch_link = parts[2].strip()
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO channels (channel_id, channel_title, channel_invite_link) VALUES (?, ?, ?)", (ch_id, ch_title, ch_link))
+        cursor.execute("INSERT INTO channels (channel_id, channel_title, channel_invite_link) VALUES (%s, %s, %s) ON CONFLICT (channel_id) DO UPDATE SET channel_title=%s, channel_invite_link=%s", (ch_id, ch_title, ch_link, ch_title, ch_link))
         conn.commit()
+        cursor.close()
         conn.close()
-        bot.send_message(message.chat.id, f"✅ **{ch_title}** kanali bazaga muvaffaqiyatli qo'shildi!", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"✅ **{ch_title}** kanali muvaffaqiyatli qo'shildi!", parse_mode="Markdown")
     except Exception:
-        bot.send_message(message.chat.id, "❌ Xatolik! Format noto'g'ri yuborildi.", parse_mode="Markdown")
+        bot.send_message(message.chat.id, "❌ Xatolik! Format noto'g'ri.", parse_mode="Markdown")
 
 def process_admin_broadcast(message):
     if message.chat.id != ADMIN_ID: return
     if message.text == '/cancel':
-        bot.send_message(ADMIN_ID, "❌ Reklama yuborish bekor qilindi.")
+        bot.send_message(ADMIN_ID, "❌ Bekor qilindi.")
         return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM user_stats")
     all_users = cursor.fetchall()
+    cursor.close()
     conn.close()
-    bot.send_message(ADMIN_ID, f"🚀 **{len(all_users)} ta** foydalanuvchiga reklama yuborish boshlandi...")
+    bot.send_message(ADMIN_ID, f"🚀 **{len(all_users)} ta** foydalanuvchiga yuborilmoqda...")
     success, failed = 0, 0
     for user in all_users:
         try:
             bot.copy_message(chat_id=user[0], from_chat_id=ADMIN_ID, message_id=message.message_id)
             success += 1
-        except Exception: failed += 1
-    bot.send_message(ADMIN_ID, f"✅ **Yuborish yakunlandi!**\n🟢 Muvaffaqiyatli: {success} ta\n🔴 Yetkazilmadi: {failed} ta")
+        except: failed += 1
+    bot.send_message(ADMIN_ID, f"✅ **Tugadi!**\n🟢 O'tdi: {success}\n🔴 Bloklagan: {failed}")
 
 def prepare_quiz(chat_id):
     data = user_data.get(chat_id)
     if not data: return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT question_text FROM history WHERE user_id=?", (chat_id,))
+    cursor.execute("SELECT question_text FROM history WHERE user_id=%s", (chat_id,))
     history = [row[0] for row in cursor.fetchall()]
 
     new_questions = [q for q in data.get('all_questions', []) if q['text'] not in history]
     if not new_questions:
         bot.send_message(chat_id, "🎉 Barcha testlarni yechib bo'lgansiz! Tarixni tozalash: /restart")
+        cursor.close()
         conn.close()
         return
 
     count = data.get('count', 30)
     selected = random.sample(new_questions, min(count, len(new_questions)))
-    for q in selected: cursor.execute("INSERT INTO history (user_id, question_text) VALUES (?, ?)", (chat_id, q['text']))
+    for q in selected: cursor.execute("INSERT INTO history (user_id, question_text) VALUES (%s, %s)", (chat_id, q['text']))
     conn.commit()
+    cursor.close()
     conn.close()
 
     data['selected_questions'] = selected
@@ -668,15 +696,13 @@ def send_next_question(chat_id):
         return
 
     q = questions[idx]
-    
-    # 🛑 JAVOBLAR BIR XIL BO'LIB QOLISHIDAN (CRASH) HIMOYA 
     raw_options = []
     for opt in q['options']:
         safe_opt = smart_truncate(opt)
-        if safe_opt not in raw_options:  # Faqat takrorlanmaganlarini olamiz
+        if safe_opt not in raw_options:
             raw_options.append(safe_opt)
             
-    if len(raw_options) < 2:  # Agar javob qolmasa o'tkazib yuboramiz
+    if len(raw_options) < 2:
         data['current_index'] += 1
         send_next_question(chat_id)
         return
@@ -693,44 +719,45 @@ def send_next_question(chat_id):
         data['active_poll_id'] = msg.poll.id
         poll_to_user[msg.poll.id] = chat_id
         threading.Timer(time_limit + 1.5, auto_force_next, args=[chat_id, idx, msg.poll.id]).start()
-    except Exception as e:
-        # Telegram API bu savolni yoqtirmasa, bot jim qotmaydi, keyingisiga o'tadi
+    except:
         data['current_index'] += 1
         send_next_question(chat_id)
 
 def check_remaining_and_ask(chat_id):
     data = user_data.get(chat_id)
     if not data or 'all_questions' not in data: return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT question_text FROM history WHERE user_id=?", (chat_id,))
+    cursor.execute("SELECT question_text FROM history WHERE user_id=%s", (chat_id,))
     history = [row[0] for row in cursor.fetchall()]
+    cursor.close()
     conn.close()
 
     remaining = [q for q in data['all_questions'] if q['text'] not in history]
     markup = types.InlineKeyboardMarkup()
-    btn_retry = types.InlineKeyboardButton("🔄 Hozirgisini qayta ishlash", callback_data="retry_last")
+    btn_retry = types.InlineKeyboardButton("🔄 Qayta ishlash", callback_data="retry_last")
 
     if remaining:
         markup.row(types.InlineKeyboardButton("30 ta yangi", callback_data="count_30"), types.InlineKeyboardButton("50 ta yangi", callback_data="count_50"))
         markup.row(btn_retry)
-        bot.send_message(chat_id, f"💡 Faylda yana **{len(remaining)}** ta yechilmagan test qoldi.\nDavom ettiramizmi?", reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(chat_id, f"💡 Faylda yana **{len(remaining)}** ta yechilmagan test qoldi.", reply_markup=markup, parse_mode="Markdown")
         data['selected_questions'] = []
     else:
         markup.row(btn_retry)
-        bot.send_message(chat_id, "🎉 Tabriklaymiz! Ushbu fayldagi barcha testlarni yechib tugatdingiz.", reply_markup=markup)
+        bot.send_message(chat_id, "🎉 Tabriklaymiz! Barcha testlarni yechib tugatdingiz.", reply_markup=markup)
 
 def auto_force_next(chat_id, expected_idx, poll_id):
     data = user_data.get(chat_id)
     if data and data.get('current_index') == expected_idx and data.get('active_poll_id') == poll_id:
         try:
             current_q = data['selected_questions'][expected_idx]
-            conn = sqlite3.connect('bot_database.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM history WHERE user_id=? AND question_text=?", (chat_id, current_q['text']))
+            cursor.execute("DELETE FROM history WHERE user_id=%s AND question_text=%s", (chat_id, current_q['text']))
             conn.commit()
+            cursor.close()
             conn.close()
-        except Exception: pass
+        except: pass
         data['active_poll_id'] = None
         data['current_index'] += 1
         send_next_question(chat_id)
