@@ -20,7 +20,7 @@ from datetime import datetime
 TOKEN = '8917939430:AAHKS4OKF9xVkpe7tJExPmKjTjYRB1aP5dI'
 
 # Sizning tayyor va toza Supabase havolangiz:
-DB_URI = "postgresql://postgres:Muzaffar_180305@db.irrakdjouuparofnqscy.supabase.co:5432/postgres"
+DB_URI = "postgresql://postgres.irrakdjouuparofnqscy:Muzaffar_180305@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
 
 # Render va Supabase o'rtasidagi tarmoq to'sig'ini chetlab o'tuvchi ulanish
 def get_db_connection():
