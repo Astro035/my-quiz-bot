@@ -17,7 +17,7 @@ from datetime import datetime
 # ⚙️ TO'G'RIDAN-TO'G'RI BULUTLI BAZA VA BOT SOZLAMALARI
 # ====================================================================
 # DIQQAT: Shu pastdagi joyga o'z tokeningizni qo'yishni unutmang!
-TOKEN = '8917939430:AAGFzTgH6TEB11q4Nvq-vPxw4wQDBQBavvM'
+TOKEN = '8917939430:AAHKS4OKF9xVkpe7tJExPmKjTjYRB1aP5dI'
 
 # Sizning tayyor va toza Supabase havolangiz:
 DB_URI = "postgresql://postgres:Muzaffar_180305@db.irrakdjouuparofnqscy.supabase.co:5432/postgres"
