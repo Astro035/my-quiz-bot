@@ -79,9 +79,6 @@ def smart_truncate(text, max_length=100, suffix='...'):
     last_space = truncated.rfind(' ')
     return (truncated[:last_space] + suffix) if last_space != -1 else (truncated + suffix)
 
-# --- BULUTLI DB BILAN BOGʻLANISH FUNKSIYALARI ---
-def get_db_connection():
-    return psycopg2.connect(DB_URI, gssencmode="disable")
 
 def init_db():
     conn = get_db_connection()
