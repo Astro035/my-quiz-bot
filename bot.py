@@ -13,19 +13,28 @@ import PyPDF2
 import pandas as pd
 from datetime import datetime
 
-# =====================================================================
-# ⚙️ TOʻGʻRIDAN-TOʻGʻRI BULUTLI BAZA VA BOT SOZLAMALARI
-# =====================================================================
+# ====================================================================
+# ⚙️ TO'G'RIDAN-TO'G'RI BULUTLI BAZA VA BOT SOZLAMALARI
+# ====================================================================
 # DIQQAT: Shu pastdagi joyga o'z tokeningizni qo'yishni unutmang!
-TOKEN = '8917939430:AAGfZtgH6TEB1lq4Nvq-vPxw4wQDBQBavvM' 
+TOKEN = '8917939430:AAGFzTgH6TEB11q4Nvq-vPxw4wQDBQBavvM'
 
-# Sizning tayyor Supabase havolangiz:
-DB_URI = "postgresql://postgres:Muzaffar%5F180305@db.irrakdjouuparofnqscy.supabase.co:5432/postgres"
-ADMIN_ID = 6638229765  
-CARD_NUMBER = '9860 1201 5457 0036'  
+# Sizning tayyor va toza Supabase havolangiz:
+DB_URI = "postgresql://postgres:Muzaffar_180305@db.irrakdjouuparofnqscy.supabase.co:5432/postgres"
+
+# Render va Supabase o'rtasidagi tarmoq to'sig'ini chetlab o'tuvchi ulanish
+def get_db_connection():
+    return psycopg2.connect(
+        DB_URI, 
+        gssencmode="disable",
+        sslmode="require"
+    )
+
+ADMIN_ID = 6638229765
+CARD_NUMBER = '9860 1201 5457 0036'
 BANK_NAME = 'Muzaffar Abdumalikov'
-ADMIN_USERNAME = '@Abdumal1koff_Muzaffar'
-# =====================================================================
+ADMIN_USERNAME = '@Abdumalikoff_Muzaffar'
+# ====================================================================
 
 bot = telebot.TeleBot(TOKEN)
 bot_info = bot.get_me()
