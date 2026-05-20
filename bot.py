@@ -20,7 +20,7 @@ from datetime import datetime
 TOKEN = '8917939430:AAGfZtgH6TEB1lq4Nvq-vPxw4wQDBQBavvM' 
 
 # Sizning tayyor Supabase havolangiz:
-DB_URI = "postgresql://postgres:Muzaffar%5F180305@db.irrakdjouuparofnqscy.supabase.co:5432/postgres?sslmode=require&proxy=socks5://anon:anon@65.109.13.111:1080"
+DB_URI = "postgresql://postgres:Muzaffar%5F180305@db.irrakdjouuparofnqscy.supabase.co:5432/postgres"
 ADMIN_ID = 6638229765  
 CARD_NUMBER = '9860 1201 5457 0036'  
 BANK_NAME = 'Muzaffar Abdumalikov'
