@@ -68,8 +68,14 @@ def smart_truncate(text, max_length=100, suffix='...'):
     return (truncated[:last_space] + suffix) if last_space != -1 else (truncated + suffix)
 
 # --- BAZA SOZLAMALARI ---
+def get_db_connection():
+    # Barcha funksiyalar uchun yagona ziyoratgoh (himoyalangan ulanish)
+    conn = sqlite3.connect('bot_database.db', check_same_thread=False, timeout=20)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db():
-    conn = sqlite3.connect('bot_database.db', check_same_thread=False)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''CREATE TABLE IF NOT EXISTS history (user_id INTEGER, question_text TEXT)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS vip_users (user_id INTEGER PRIMARY KEY, is_vip INTEGER DEFAULT 0)''')
@@ -83,11 +89,10 @@ def init_db():
                         join_date DATE DEFAULT CURRENT_DATE
                     )''')
     
-    # Eskidan bor bazaga username ustunini qo'shish (Xato bermasligi uchun try-except)
     try:
         cursor.execute("ALTER TABLE user_stats ADD COLUMN username TEXT")
     except Exception:
-        pass # Agar ustun allaqachon mavjud bo'lsa, jimgina o'tib ketadi
+        pass 
         
     cursor.execute('''CREATE TABLE IF NOT EXISTS channels (
                         channel_id TEXT PRIMARY KEY,
@@ -102,7 +107,7 @@ init_db()
 # --- FOYDALANUVCHI VA OBUNA FUNKSIYALARI ---
 def check_vip_status(user_id):
     if user_id == ADMIN_ID: return True
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT is_vip FROM vip_users WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
@@ -111,7 +116,7 @@ def check_vip_status(user_id):
 
 def check_all_subscriptions(user_id):
     if user_id == ADMIN_ID: return True
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT channel_id, channel_title, channel_invite_link FROM channels")
     channels = cursor.fetchall()
@@ -145,7 +150,7 @@ def require_subscription(message):
     return False 
 
 def get_or_create_user(user_id, first_name, username, referrer_id=None):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=?", (user_id,))
     user = cursor.fetchone()
@@ -163,14 +168,13 @@ def get_or_create_user(user_id, first_name, username, referrer_id=None):
                 conn.commit()
                 bot.send_message(referrer_id, "🎉 **Tabriklaymiz!** Siz 3 ta do'stingizni taklif qildingiz va yana **+1 ta BEPUL fayl yuklash** urinishini qo'lga kiritdingiz!", parse_mode="Markdown")
     else:
-        # Eski a'zolar qayta kirsayam, usernameni yangilab qo'yadi
         cursor.execute("UPDATE user_stats SET username = ? WHERE user_id = ?", (username, user_id))
         conn.commit()
         
     conn.close()
 
 def get_trials_left(user_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT trials_left FROM user_stats WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
@@ -178,14 +182,14 @@ def get_trials_left(user_id):
     return row[0] if row else 0
 
 def use_trial(user_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE user_stats SET trials_left = trials_left - 1 WHERE user_id=? AND trials_left > 0", (user_id,))
     conn.commit()
     conn.close()
 
 def add_correct_answer(user_id):
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE user_stats SET total_correct = total_correct + 1 WHERE user_id=?", (user_id,))
     conn.commit()
@@ -276,7 +280,7 @@ def send_welcome(message):
 @bot.message_handler(commands=['top'])
 def cmd_top(message):
     if require_subscription(message): return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT first_name, total_correct FROM user_stats ORDER BY total_correct DESC LIMIT 10")
     top_users = cursor.fetchall()
@@ -297,7 +301,7 @@ def cmd_top(message):
 @bot.message_handler(commands=['stat'])
 def cmd_stat(message):
     if message.chat.id != ADMIN_ID: return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM user_stats")
     total_users = cursor.fetchone()[0]
@@ -342,7 +346,7 @@ def cmd_addvip(message):
         return
 
     try:
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO vip_users (user_id, is_vip) VALUES (?, 1)", (target_id,))
         conn.commit()
@@ -367,7 +371,7 @@ def cmd_delvip(message):
         return
 
     try:
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO vip_users (user_id, is_vip) VALUES (?, 0)", (target_id,))
         conn.commit()
@@ -391,7 +395,7 @@ def cmd_help(message):
 def cmd_restart(message):
     if require_subscription(message): return
     chat_id = message.chat.id
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM history WHERE user_id=?", (chat_id,))
     conn.commit()
@@ -411,7 +415,7 @@ def cmd_finish(message):
         
         unanswered_questions = data['selected_questions'][current_idx:]
         if unanswered_questions:
-            conn = sqlite3.connect('bot_database.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             for q in unanswered_questions:
                 cursor.execute("DELETE FROM history WHERE user_id=? AND question_text=?", (chat_id, q['text']))
@@ -458,11 +462,10 @@ def handle_document(message):
         bot.send_message(chat_id, "❌ Fayldan test topilmadi. Format to'g'riligiga ishonch hosil qiling.")
         return
 
-    # BO'SH O'ZGARUVCHILARDAN HIMOYALANGAN ZIRH
     user_data[chat_id] = {
         'all_questions': questions,
-        'count': 30, # Default qotib qolmasligi uchun
-        'time': 15   # Default qotib qolmasligi uchun
+        'count': 30, 
+        'time': 15   
     }
     
     markup = types.InlineKeyboardMarkup()
@@ -513,7 +516,7 @@ def handle_query(call):
 
     elif call.data == "admin_del_ch":
         bot.answer_callback_query(call.id)
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT channel_id, channel_title FROM channels")
         channels = cursor.fetchall()
@@ -529,7 +532,7 @@ def handle_query(call):
 
     elif call.data.startswith("delch_"):
         ch_id = call.data.split('_')[1]
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("DELETE FROM channels WHERE channel_id = ?", (ch_id,))
         conn.commit()
@@ -537,16 +540,13 @@ def handle_query(call):
         bot.edit_message_text("✅ Kanal ro'yxatdan muvaffaqiyatli o'chirildi.", chat_id, call.message.message_id)
         return
 
-    # EXCEL FAYL YARATISH FUNKSIYASI UCHUN:
     elif call.data == "admin_export_users":
         bot.answer_callback_query(call.id, "📊 Excel fayl tayyorlanmoqda. Kuting...")
         try:
-            conn = sqlite3.connect('bot_database.db')
-            # Bazadan malumotlarni olamiz
+            conn = get_db_connection()
             df = pd.read_sql_query("SELECT user_id, first_name, username, trials_left, total_correct, referrals_count, join_date FROM user_stats", conn)
             conn.close()
             
-            # Excel jadval ustunlarini chiroyli ko'rinishga keltiramiz
             df.columns = ['ID Raqami', 'Ism-Sharifi', 'Username', 'Qolgan Urinishlar', "To'g'ri Javoblar", 'Taklif Qilganlar', "Qo'shilgan Sana"]
             
             file_name = "Foydalanuvchilar_Royxati.xlsx"
@@ -555,7 +555,7 @@ def handle_query(call):
             with open(file_name, 'rb') as f:
                 bot.send_document(ADMIN_ID, f, caption="👥 **Barcha foydalanuvchilar ro'yxati (Excel)**", parse_mode="Markdown")
             
-            os.remove(file_name) # Xotira to'lib ketmasligi uchun jo'natib bo'lgach faylni o'chiramiz
+            os.remove(file_name) 
         except Exception as e:
             bot.send_message(chat_id, f"❌ Fayl yaratishda xatolik: {e}")
         return
@@ -597,7 +597,7 @@ def process_add_channel(message):
         ch_id = parts[0].strip()
         ch_title = parts[1].strip()
         ch_link = parts[2].strip()
-        conn = sqlite3.connect('bot_database.db')
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO channels (channel_id, channel_title, channel_invite_link) VALUES (?, ?, ?)", (ch_id, ch_title, ch_link))
         conn.commit()
@@ -611,7 +611,7 @@ def process_admin_broadcast(message):
     if message.text == '/cancel':
         bot.send_message(ADMIN_ID, "❌ Reklama yuborish bekor qilindi.")
         return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM user_stats")
     all_users = cursor.fetchall()
@@ -628,7 +628,7 @@ def process_admin_broadcast(message):
 def prepare_quiz(chat_id):
     data = user_data.get(chat_id)
     if not data: return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT question_text FROM history WHERE user_id=?", (chat_id,))
     history = [row[0] for row in cursor.fetchall()]
@@ -669,14 +669,13 @@ def send_next_question(chat_id):
 
     q = questions[idx]
     
-    # 🛑 JAVOBLAR BIR XIL BO'LIB QOLISHIDAN (CRASH) HIMOYA 
     raw_options = []
     for opt in q['options']:
         safe_opt = smart_truncate(opt)
-        if safe_opt not in raw_options:  # Faqat takrorlanmaganlarini olamiz
+        if safe_opt not in raw_options:  
             raw_options.append(safe_opt)
             
-    if len(raw_options) < 2:  # Agar javob qolmasa o'tkazib yuboramiz
+    if len(raw_options) < 2:  
         data['current_index'] += 1
         send_next_question(chat_id)
         return
@@ -694,14 +693,13 @@ def send_next_question(chat_id):
         poll_to_user[msg.poll.id] = chat_id
         threading.Timer(time_limit + 1.5, auto_force_next, args=[chat_id, idx, msg.poll.id]).start()
     except Exception as e:
-        # Telegram API bu savolni yoqtirmasa, bot jim qotmaydi, keyingisiga o'tadi
         data['current_index'] += 1
         send_next_question(chat_id)
 
 def check_remaining_and_ask(chat_id):
     data = user_data.get(chat_id)
     if not data or 'all_questions' not in data: return
-    conn = sqlite3.connect('bot_database.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT question_text FROM history WHERE user_id=?", (chat_id,))
     history = [row[0] for row in cursor.fetchall()]
@@ -725,7 +723,7 @@ def auto_force_next(chat_id, expected_idx, poll_id):
     if data and data.get('current_index') == expected_idx and data.get('active_poll_id') == poll_id:
         try:
             current_q = data['selected_questions'][expected_idx]
-            conn = sqlite3.connect('bot_database.db')
+            conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute("DELETE FROM history WHERE user_id=? AND question_text=?", (chat_id, current_q['text']))
             conn.commit()
