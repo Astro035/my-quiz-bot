@@ -72,7 +72,7 @@ def smart_truncate(text, max_length=100, suffix='...'):
 
 # --- BULUTLI DB BILAN BOGʻLANISH FUNKSIYALARI ---
 def get_db_connection():
-    return psycopg2.connect(DB_URI)
+    return psycopg2.connect(DB_URI, gssencmode="disable")
 
 def init_db():
     conn = get_db_connection()
